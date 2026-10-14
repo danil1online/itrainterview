@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+.env
+sandbox-work/
+*.sqlite3
+.pytest_cache/
+*.tsbuildinfo
+.ipynb_checkpoints/
+session-ses_*.md
