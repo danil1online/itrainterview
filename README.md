@@ -176,3 +176,5 @@ cd backend && python -m pytest tests -q
 SANDBOX_LOCAL_DIR=/tmp/sandbox-work SANDBOX_HOST_DIR=/tmp/sandbox-work \
   python scripts/validate_seed.py
 ```
+
+## [Wiki](https://github.com/danil1online/itrainterview/wiki)
