@@ -1,3 +1,5 @@
+"""Каталог задач /api/tasks для студента и генерация персональных легенд через LLM-очередь."""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,6 +21,7 @@ def list_tasks(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Активные задачи с фильтром по паттерну/уровню и флагом solved у текущего пользователя."""
     stmt = select(Task).where(Task.is_active.is_(True))
     if pattern:
         stmt = stmt.where(Task.pattern == pattern)
@@ -41,6 +44,7 @@ def get_task(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Карточка задачи: легенда (с учётом ИИ-варианта студента), sample-тесты, подсказки, solved; 404 — нет задачи."""
     task = get_task_or_404(db, slug)
     title, legend = effective_legend(db, user, task)
     sample_tests = [TestOut(**t) for t in task.tests if t.get("sample")]
@@ -63,6 +67,7 @@ async def retitle_task(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Ставит job 'retitle' в очередь; при save=True результат закрепляется как личный вариант легенды."""
     task = get_task_or_404(db, slug)
     job = submit_job(
         db, user.id, "retitle",
@@ -78,7 +83,7 @@ async def generate_set(
     user: User = Depends(get_current_user),
 ):
     """Персональный комплект: по одному job'у на задачу — очередь остаётся справедливой."""
-    slugs = payload.slugs or [t.slug for t in db.scalars(select(Task).order_by(Task.id)).all()]
+    slugs = payload.slugs or [t.slug for t in db.scalars(select(Task).where(Task.is_active == True).order_by(Task.id)).all()]  # noqa: E712
     if not slugs:
         raise HTTPException(422, "Нет задач для генерации")
     existing = {t.slug for t in db.scalars(select(Task).where(Task.slug.in_(slugs))).all()}

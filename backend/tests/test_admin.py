@@ -1,3 +1,6 @@
+"""Тесты админ-раздела: пользователи, CRUD задач, настройки, статистика, community-экспорт."""
+
+
 def test_admin_access_denied_for_student(client, student_headers):
     assert client.get("/api/admin/users", headers=student_headers).status_code == 403
     assert client.get("/api/admin/stats").status_code == 401
@@ -28,11 +31,24 @@ def test_admin_reset_password(client, admin_headers):
     db = SessionLocal()
     uid = db.query(User).filter_by(username="student1").first().id
     db.close()
-    r = client.post(f"/api/admin/users/{uid}/reset_password?new_password=brandnew1", headers=admin_headers)
+    # пароль передаётся в теле запроса, а не в URL
+    r = client.post(f"/api/admin/users/{uid}/reset_password", json={"new_password": "brandnew1"}, headers=admin_headers)
     assert r.status_code == 200
     assert client.post("/api/auth/login", json={"login": "student1", "password": "brandnew1"}).status_code == 200
     # вернуть как было
-    client.post(f"/api/admin/users/{uid}/reset_password?new_password=studentpass1", headers=admin_headers)
+    client.post(f"/api/admin/users/{uid}/reset_password", json={"new_password": "studentpass1"}, headers=admin_headers)
+
+
+def test_admin_cannot_change_own_role(client, admin_headers):
+    """Админ не может понизить роль самому себе (потеря доступа к панели)."""
+    from app.db import SessionLocal
+    from app.models import User
+
+    db = SessionLocal()
+    uid = db.query(User).filter_by(username="admin1").first().id
+    db.close()
+    r = client.patch(f"/api/admin/users/{uid}", json={"role": "student"}, headers=admin_headers)
+    assert r.status_code == 400 and "себе" in r.json()["detail"]
 
 
 def test_admin_task_crud(client, admin_headers):
@@ -57,7 +73,7 @@ def test_admin_task_crud(client, admin_headers):
     assert r.status_code == 200 and r.json()["title"] == "Обновлённая задача"
 
     assert client.delete(f"/api/admin/tasks/{tid}", headers=admin_headers).status_code == 200
-    # студент не видит деактивированную задачу
+    # после удаления задача не видна даже администратору
     from tests.conftest import _login
 
     hdr = _login(client, "admin@example.com", "adminpass1")
@@ -74,6 +90,8 @@ def test_admin_settings(client, admin_headers):
     s = client.get("/api/admin/settings", headers=admin_headers).json()
     assert s["llm_model"] == "custom-model.gguf"
     assert s["sandbox_timeout_sec"] == "7"
+    # hot-настройки конкурентности видны в GET (редактируются и читаются)
+    assert "llm_max_concurrent" in s and "sandbox_max_concurrent" in s
 
     assert client.put("/api/admin/settings", json={"values": {"evil_key": "1"}}, headers=admin_headers).status_code == 400
     assert client.put("/api/admin/settings", json={"values": {"sandbox_timeout_sec": "999"}}, headers=admin_headers).status_code == 400

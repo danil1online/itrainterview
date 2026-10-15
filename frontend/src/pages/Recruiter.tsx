@@ -1,3 +1,7 @@
+/**
+ * Скрининг-собеседование с «рекрутером» (LLM), доступно после заполнения резюме.
+ * Диалог идёт через LLM-очередь (pollLlmJob); рекомендации устаревают после нового диалога.
+ */
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, ResumeResponse, pollLlmJob } from '../api';
@@ -45,6 +49,7 @@ export default function Recruiter() {
   const queueLine = (j: { status: string; position: number }) =>
     j.status === 'running' ? 'Модель думает…' : `Модель занята — вы №${j.position + 1} в очереди`;
 
+  // Отправляет реплику (модель получает последние 10 сообщений) и ждёт ответ поллингом; при ошибке откатывает своё сообщение.
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -61,7 +66,7 @@ export default function Recruiter() {
       const job = await pollLlmJob(job_id, (j) => setQueueInfo(queueLine(j)));
       if (job.status !== 'done' || !job.result) throw new Error(job.error || 'Модель не ответила');
       setMessages((m) => [...m, { role: 'assistant', content: job.result as string }]);
-      // новый диалог устаряет старые рекомендации — кнопка перегенерации оживает
+      // новый диалог устаревает старые рекомендации — кнопка перегенерации оживает
       setRecommendation((r) => (r ? { ...r, fresh: false } : r));
     } catch (e: any) {
       setError(e.message);
@@ -72,6 +77,7 @@ export default function Recruiter() {
     }
   };
 
+  // Генерация рекомендаций по итогам диалога: job в LLM-очереди, результат помечается fresh=true.
   const getRecommendation = async () => {
     setRecBusy(true);
     setError('');

@@ -1,8 +1,14 @@
+"""LLM-генерация вариантов задач (новая легенда/заголовок) и сообщений чата с наставником.
+
+Ретайтлинг — до 3 попыток, упавшие разделы формата доклеиваются из оригинала; в контекст чата попадают код студента, результат последнего запуска и предупреждение о несоответствии языка.
+"""
+
 from app.models import Task
 from app.services.llm import LLMError, chat_completion, extract_json
 
 
 def _retitle_system(theme: str | None) -> str:
+    """Системный промпт ретайтлинга: новая легенда при сохранении сути, ответ строго JSON."""
     base = (
         "Ты — составитель задач для алгоритмических собеседований.\n"
         "Переформулируй задачу: придумай НОВУЮ сюжетную легенду (область, имена, антураж), "
@@ -28,6 +34,7 @@ def _extract_format(legend: str) -> str:
 
 
 async def generate_variant(task: Task, db=None, theme: str | None = None) -> dict:
+    """Генерирует новый {title, legend} задачи; до 3 попыток, при провале всех — LLMError."""
     user_prompt = (
         f"Уровень: {task.level}. Паттерн: {task.pattern}.\n"
         f"Задача:\n# {task.title}\n{task.legend[:4000]}"
@@ -115,6 +122,7 @@ def build_chat_messages(
     mode: str,
     last_run_summary: str | None,
 ) -> list[dict]:
+    """Собирает сообщения для наставника: системный промпт по режиму, контекст и последние 12 сообщений истории."""
     system = CHAT_SYSTEM_EXPLAIN if mode == "explain" else CHAT_SYSTEM_HINT
     context = [f"Текущая задача: {task.title} (уровень {task.level})\n{task.legend[:2500]}"]
     if code:

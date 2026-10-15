@@ -1,3 +1,7 @@
+/**
+ * Тренажёр «Вайб-кодинг»: диалог с компактной моделью (она не видит редактор), прогон тестов/мутантов, баллы.
+ * Код автосохраняется (debounce), пока задача не решена; после зачёта диалог и редактор блокируются.
+ */
 import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { api, pollLlmJob, VibeRunResult, VibeSession, VibeTaskListItem } from '../api';
@@ -18,6 +22,7 @@ function TypeBadge({ type }: { type: string }) {
   );
 }
 
+// Мини-рендер markdown: понимает только **жирный**.
 function MdText({ text }: { text: string }) {
   return (
     <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}>
@@ -98,6 +103,7 @@ export default function VibeCoding() {
   );
 }
 
+// Экран сессии: три колонки — условие, диалог с моделью, редактор + результаты прогона.
 function SessionView({ session, onBack }: { session: VibeSession; onBack: () => void }) {
   const [code, setCode] = useState(session.code);
   const [messages, setMessages] = useState<{ role: string; content: string }[]>(session.messages || []);

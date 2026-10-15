@@ -37,12 +37,14 @@ RECOMMEND_SYSTEM = (
 
 
 def _load_resume(db: Session, user: User) -> tuple[ResumeData, dict]:
+    """Данные резюме пользователя (пустые по умолчанию) и степень его готовности к скринингу."""
     row = db.scalar(select(Resume).where(Resume.user_id == user.id))
     data = ResumeData.model_validate(row.data) if row else ResumeData()
     return data, resume_completion(data)
 
 
 def _latest_recommendation(db: Session, user: User) -> RecruiterMessage | None:
+    """Последнее сообщение с ролью recommendation, если оно есть."""
     return db.scalar(
         select(RecruiterMessage)
         .where(RecruiterMessage.user_id == user.id, RecruiterMessage.role == "recommendation")
@@ -71,6 +73,7 @@ async def chat(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Шаг диалога со скрининг-рекрутером: user-сообщение сохраняется сразу, ответ придёт job'ом 'recruiter_chat'. 409 — резюме не готово."""
     data, comp = _load_resume(db, user)
     if not comp["ready"]:
         raise HTTPException(409, detail={"issues": comp["missing"]})
@@ -96,11 +99,12 @@ def history(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Диалог с рекрутером в хронологическом порядке (без сообщений recommendation; limit 1..100)."""
     rows = db.scalars(
         select(RecruiterMessage)
         .where(RecruiterMessage.user_id == user.id, RecruiterMessage.role != "recommendation")
         .order_by(RecruiterMessage.created_at.desc(), RecruiterMessage.id.desc())
-        .limit(limit)
+        .limit(max(1, min(limit, 100)))
     ).all()
     rows = list(reversed(rows))
     return [
@@ -114,6 +118,7 @@ def get_recommendation(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Последние рекомендации; fresh=False, если после них шёл новый диалог. 404 — рекомендаций ещё нет."""
     rec = _latest_recommendation(db, user)
     if rec is None:
         raise HTTPException(404, "Рекомендаций пока нет")
@@ -140,6 +145,7 @@ async def recommendations(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Генерация рекомендаций по резюме и транскрипту последних 20 сообщений через очередь. 409 — резюме не готово или текущие ещё актуальны."""
     data, comp = _load_resume(db, user)
     if not comp["ready"]:
         raise HTTPException(409, detail={"issues": comp["missing"]})

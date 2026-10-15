@@ -1,3 +1,5 @@
+"""Банк задач: бинарный поиск и сортировки (junior/middle)."""
+
 from app.seed.bank_common import T
 
 TASKS = [

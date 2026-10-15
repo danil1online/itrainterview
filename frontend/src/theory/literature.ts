@@ -1,3 +1,4 @@
+// Список литературы по алгоритмам (PDF-ссылки) для страницы «Теория».
 export interface LiteratureItem {
   label: string;
   url: string;

@@ -18,6 +18,7 @@ from app.services.contribute import ContributeError, export_task  # noqa: E402
 
 
 def main() -> int:
+    """Разбирает аргументы и экспортирует задачу из БД в community-файл."""
     parser = argparse.ArgumentParser(description="Экспорт задачи как community-файла")
     parser.add_argument("--slug", required=True, help="slug задачи в системе")
     parser.add_argument("--author", required=True, help="имя автора вклада")

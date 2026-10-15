@@ -1,3 +1,5 @@
+"""Аутентификация /api/auth: регистрация, логин, обновление токенов, профиль текущего пользователя."""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -18,6 +20,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 def _tokens(user: User) -> TokenPair:
+    """Пара access/refresh JWT для пользователя."""
     return TokenPair(
         access_token=create_access_token(user.id, user.role),
         refresh_token=create_refresh_token(user.id, user.role),
@@ -26,6 +29,7 @@ def _tokens(user: User) -> TokenPair:
 
 @router.post("/register", response_model=TokenPair, status_code=201)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
+    """Создаёт аккаунт со ролью student и возвращает токены; 403 — регистрация отключена, 409 — занятый email/username."""
     if get_setting(db, "allow_self_registration", "true").lower() == "false":
         raise HTTPException(403, "Самостоятельная регистрация отключена администратором")
     if db.scalar(select(User).where(User.email == payload.email.lower())):
@@ -46,6 +50,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenPair)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    """Логин по email или username; 401 — неверные данные, 403 — аккаунт заблокирован."""
     user = db.scalar(
         select(User).where(
             or_(User.email == payload.login.lower(), User.username == payload.login)
@@ -60,6 +65,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/refresh", response_model=TokenPair)
 def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+    """Новая пара токенов по refresh-токену; 401 — битый токен, не того типа, или пользователь недоступен."""
     import jwt as pyjwt
 
     try:
@@ -76,4 +82,5 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
+    """Профиль текущего пользователя (из access-токена)."""
     return user

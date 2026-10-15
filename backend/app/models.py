@@ -1,3 +1,5 @@
+"""SQLAlchemy-модели доменной БД: пользователи, задачи, сабмиты, чаты, вайб-кодинг, LLM-очередь."""
+
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
@@ -7,10 +9,13 @@ from app.db import Base
 
 
 def utcnow() -> datetime:
+    """Возвращает текущее время в UTC (default для временных колонок)."""
     return datetime.now(timezone.utc)
 
 
 class User(Base):
+    """Пользователь системы: студент или администратор."""
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -25,6 +30,8 @@ class User(Base):
 
 
 class Task(Base):
+    """Задача из банка: легенда, паттерн, уровень, тесты и эталонное решение."""
+
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -55,6 +62,8 @@ class TaskVariant(Base):
 
 
 class Submission(Base):
+    """Попытка студента решить задачу: код, статус и результаты тестов."""
+
     __tablename__ = "submissions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -93,6 +102,8 @@ class RunLog(Base):
 
 
 class ChatMessage(Base):
+    """Сообщение диалога студента с ИИ-помощником по задаче."""
+
     __tablename__ = "chat_messages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -104,6 +115,8 @@ class ChatMessage(Base):
 
 
 class Resume(Base):
+    """Резюме студента (JSON) — одно на пользователя."""
+
     __tablename__ = "resumes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -115,6 +128,8 @@ class Resume(Base):
 
 
 class RecruiterMessage(Base):
+    """Сообщение диалога студента со скрининг-рекрутером."""
+
     __tablename__ = "recruiter_messages"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -125,6 +140,8 @@ class RecruiterMessage(Base):
 
 
 class VibeTask(Base):
+    """Задача тренажёра «Вайб-кодинг» (bugfix|tests|refactor|contract)."""
+
     __tablename__ = "vibe_tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -145,6 +162,8 @@ class VibeTask(Base):
 
 
 class VibeSession(Base):
+    """Сессия студента в задаче вайб-кодинга: код, чат, прогоны и счёт."""
+
     __tablename__ = "vibe_sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -184,6 +203,8 @@ class LLMJob(Base):
 
 
 class SystemSetting(Base):
+    """Системная настройка в формате ключ-значение (LLM, песочница и т.п.)."""
+
     __tablename__ = "system_settings"
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -203,11 +224,13 @@ EDITABLE_SETTINGS = [
 
 
 def get_setting(db, key: str, default: str = "") -> str:
+    """Возвращает настройку из БД; если её нет или она пуста — default."""
     row = db.get(SystemSetting, key)
     return row.value if row is not None and row.value != "" else default
 
 
 def set_setting(db, key: str, value: str) -> None:
+    """Создаёт или обновляет системную настройку в БД."""
     row = db.get(SystemSetting, key)
     if row is None:
         db.add(SystemSetting(key=key, value=value))

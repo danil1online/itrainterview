@@ -1,6 +1,10 @@
+/**
+ * Админ-панель: пользователи, задачи, вайб-задачи, результаты, настройки (роуты /admin/*).
+ * Экспорт задачи как community-вклада: перед генерацией файла бэкенд проверяет эталонное решение в песочнице.
+ */
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { api, AdminUser, LEVEL_LABELS, PATTERN_LABELS, STATUS_LABELS, VibeAdminTask, pollLlmJob } from '../api';
+import { api, AdminUser, LEVEL_LABELS, PATTERN_LABELS, STATUS_LABELS, VibeAdminTask, downloadFile, pollLlmJob } from '../api';
 import { useAuth } from '../auth';
 
 const TABS = [
@@ -35,18 +39,24 @@ export default function Admin() {
   );
 }
 
+// Вкладка «Пользователи»: поиск, смена роли/блокировка, сброс пароля.
 function UsersTab() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [q, setQ] = useState('');
   const [error, setError] = useState('');
   const load = useCallback(() => api<AdminUser[]>(`/api/admin/users${q ? `?q=${encodeURIComponent(q)}` : ''}`).then(setUsers).catch((e) => setError(e.message)), [q]);
-  useEffect(() => { load(); }, [load]);
+  // debounce: не шлём запрос на каждый символ поиска
+  useEffect(() => {
+    const t = setTimeout(load, 300);
+    return () => clearTimeout(t);
+  }, [load]);
 
   const patch = async (id: number, body: object) => { await api(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }); load(); };
   const resetPassword = async (id: number) => {
     const pw = prompt('Новый пароль (минимум 6 символов):');
     if (!pw) return;
-    try { await api(`/api/admin/users/${id}/reset_password?new_password=${encodeURIComponent(pw)}`, { method: 'POST' }); alert('Пароль обновлён'); } catch (e: any) { alert(e.message); }
+    // пароль в теле запроса, а не в URL — не попадает в историю/логи
+    try { await api(`/api/admin/users/${id}/reset_password`, { method: 'POST', body: JSON.stringify({ new_password: pw }) }); alert('Пароль обновлён'); } catch (e: any) { alert(e.message); }
   };
 
   return (
@@ -88,6 +98,7 @@ interface AdminTask {
   hints: string[]; tests: any[]; reference_solution: string; is_active: boolean;
 }
 
+// Вкладка «Задачи»: список + форма редактирования (тесты — JSON), ИИ-генерация легенды через LLM-очередь, community-экспорт.
 function TasksTab() {
   const { user } = useAuth();
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -119,6 +130,7 @@ function TasksTab() {
     } catch (err: any) { setError(err.message); }
   };
 
+  // Просит LLM переписать легенду: job в очереди, ждём поллингом и перезагружаем список.
   const retitle = async (t: AdminTask) => {
     try {
       const { job_id } = await api<{ job_id: number }>(`/api/admin/tasks/${t.id}/retitle`, { method: 'POST' });
@@ -136,6 +148,7 @@ function TasksTab() {
     setExpResult(null);
   };
 
+  // Генерация community-файла: сервер сначала прогоняет эталон по всем тестам задачи.
   const runExport = async () => {
     if (!exporting) return;
     setExpBusy(true);
@@ -292,6 +305,7 @@ interface ResultRow {
   language: string; status: string; passed_count: number; total_count: number; time_ms: number; created_at: string;
 }
 
+// Вкладка «Результаты»: все отправки с фильтром по статусу; клик по строке — детали (код + разбор ИИ).
 function ResultsTab() {
   const [rows, setRows] = useState<ResultRow[]>([]);
   const [status, setStatus] = useState('');
@@ -308,7 +322,7 @@ function ResultsTab() {
           <option value="">Все статусы</option>
           {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <a className="btn ghost" href="/api/admin/export/submissions.csv">⬇ CSV</a>
+        <button className="btn ghost" onClick={() => downloadFile('/api/admin/export/submissions.csv', 'submissions.csv').catch((e) => setError(e.message))}>⬇ CSV</button>
       </div>
       {error && <div className="error-text">{error}</div>}
       <table className="grid">
@@ -339,6 +353,7 @@ function ResultsTab() {
   );
 }
 
+// Настройки LLM и песочницы; применяются на бэкенде без перезапуска.
 function SettingsTab() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [msg, setMsg] = useState('');
@@ -358,8 +373,10 @@ function SettingsTab() {
     ['llm_base_url', 'LLM: OpenAI-совместимый URL', 'http://192.168.2.83:8080/v1'],
     ['llm_model', 'LLM: имя модели (пусто = автоопределение)', 'qwen2.5-3b-instruct-q4_k_m.gguf'],
     ['llm_api_key', 'LLM: API-ключ (если нужен)', ''],
+    ['llm_max_concurrent', 'LLM-очередь: параллельных запросов к модели (1..32)', '1'],
     ['sandbox_timeout_sec', 'Песочница: таймаут, сек (1..60)', '5'],
     ['sandbox_memory_mb', 'Песочница: память, МБ (64..2048)', '256'],
+    ['sandbox_max_concurrent', 'Песочница: одновременных контейнеров (пусто = min(CPU, 8))', ''],
   ];
 
   return (
@@ -399,6 +416,7 @@ const EMPTY_VIBE: Omit<VibeAdminTask, 'id'> = {
   hidden_tests: [], reference_solution: '', mutants: [], min_mutants_caught: 0, enabled: true,
 };
 
+// CRUD вайб-задач: скрытые тесты/мутанты — JSON, эталон проверяется в песочнице при сохранении.
 function VibeTasksTab() {
   const [tasks, setTasks] = useState<VibeAdminTask[]>([]);
   const [editing, setEditing] = useState<(Omit<VibeAdminTask, 'id'> & { id?: number }) | null>(null);

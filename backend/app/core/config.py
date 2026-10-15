@@ -1,9 +1,13 @@
+"""Настройки приложения (pydantic-settings, .env): БД, JWT, LLM, песочница."""
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Все настройки приложения; переопределяются переменными окружения."""
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "ITInterview"
@@ -32,11 +36,13 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
+        """cors_origins как список origin (разделитель — запятая)."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """Кэшированный (lru_cache) экземпляр настроек."""
     return Settings()
 
 

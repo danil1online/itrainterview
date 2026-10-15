@@ -33,6 +33,7 @@ MSG_TRUNCATE = 1500
 
 
 def _budgeted(messages: list[dict]) -> list[dict]:
+    """История для LLM: последние 10 сообщений, role сводится к user/assistant, контент обрезан до 1500 символов."""
     out = []
     for m in messages[-HISTORY_LIMIT:]:
         role = m.get("role") if m.get("role") in ("user", "assistant") else "user"
@@ -41,6 +42,7 @@ def _budgeted(messages: list[dict]) -> list[dict]:
 
 
 def _session_out(s: VibeSession, t: VibeTask) -> VibeSessionOut:
+    """VibeSession + VibeTask -> VibeSessionOut; NULL-поля как пустые списки/словари."""
     return VibeSessionOut(
         id=s.id, task_id=t.id, slug=t.slug, task_type=t.task_type, title=t.title,
         description_md=t.description_md, initial_code=t.initial_code, status=s.status,
@@ -50,6 +52,7 @@ def _session_out(s: VibeSession, t: VibeTask) -> VibeSessionOut:
 
 
 def _get_session(db: Session, user: User, session_id: int) -> tuple[VibeSession, VibeTask]:
+    """Сессия и её задача; 404 если сессия чужая/не найдена или задача удалена."""
     s = db.get(VibeSession, session_id)
     if s is None or s.user_id != user.id:
         raise HTTPException(404, "Сессия не найдена")
@@ -61,6 +64,7 @@ def _get_session(db: Session, user: User, session_id: int) -> tuple[VibeSession,
 
 @router.get("/tasks", response_model=list[VibeTaskListItem])
 def list_tasks(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Включённые вайб-задачи со статусом и баллом сессии пользователя, если она уже есть."""
     tasks = db.scalars(select(VibeTask).where(VibeTask.enabled).order_by(VibeTask.id)).all()
     sessions = {
         s.task_id: s
@@ -78,6 +82,7 @@ def list_tasks(db: Session = Depends(get_db), user: User = Depends(get_current_u
 
 @router.post("/tasks/{task_id}/session", response_model=VibeSessionOut)
 def start_session(task_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Создаёт сессию с initial_code (или возвращает существующую); 404 — задача нет или отключена."""
     t = db.get(VibeTask, task_id)
     if t is None or not t.enabled:
         raise HTTPException(404, "Задача не найдена")
@@ -94,6 +99,7 @@ def start_session(task_id: int, db: Session = Depends(get_db), user: User = Depe
 
 @router.get("/sessions/{session_id}", response_model=VibeSessionOut)
 def get_session(session_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Текущее состояние сессии: код, история, последний прогон, балл; 404 — чужая или нет."""
     s, t = _get_session(db, user, session_id)
     return _session_out(s, t)
 
@@ -105,6 +111,7 @@ def save_code(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Сохраняет код студента в сессии (commit); 404 — чужая или нет."""
     s, _t = _get_session(db, user, session_id)
     s.code = payload.code
     db.commit()
@@ -118,6 +125,7 @@ async def chat(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Сообщение ИИ-напарнику: user-сообщение сразу в историю, ответ придёт job'ом 'vibe_chat'. 409 — задача решена, 422 — пустое сообщение."""
     s, _t = _get_session(db, user, session_id)
     if s.status == "passed":
         raise HTTPException(409, "Задача уже решена — диалог закрыт")
@@ -147,6 +155,7 @@ def run(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Прогон кода: мутанты для типа tests, скрытые тесты иначе; обновляет last_run/балл, при успехе status='passed'. 502 — песочница недоступна."""
     from dataclasses import asdict
 
     from app.services.sandbox import SandboxError

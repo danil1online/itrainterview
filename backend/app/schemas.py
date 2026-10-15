@@ -1,3 +1,5 @@
+"""Pydantic-схемы запросов и ответов API (auth, задачи, резюме, вайб-кодинг, LLM-очередь)."""
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -55,6 +57,8 @@ class TestOut(BaseModel):
 
 
 class TaskOut(BaseModel):
+    """Карточка задачи для студента: только sample-тесты, без эталона."""
+
     slug: str
     title: str
     legend: str
@@ -92,11 +96,15 @@ class TaskUpsert(BaseModel):
 
 
 class RetitleRequest(BaseModel):
+    """Перегенерация легенды задачи; save — закрепить вариант за студентом."""
+
     save: bool = False  # студент: сохранить вариант за собой
     theme: str | None = Field(default=None, max_length=200)  # единый стиль легенд для комплекта
 
 
 class GenerateSetRequest(BaseModel):
+    """Комплект задач для генерации легенд; пустые slugs — весь банк."""
+
     slugs: list[str] = []  # пусто — все задачи банка
     theme: str | None = Field(default=None, max_length=200)
 
@@ -222,9 +230,6 @@ class RecruiterChatResponse(BaseModel):
 
 # ---------- Runs / submissions ----------
 
-LANGUAGES = {"python", "java", "cpp", "javascript"}
-
-
 class RunRequest(BaseModel):
     language: str = Field(pattern=r"^(python|java|cpp|javascript)$")
     code: str = Field(min_length=1, max_length=60000)
@@ -301,6 +306,12 @@ class SettingsUpdate(BaseModel):
     values: dict[str, str]
 
 
+class PasswordResetRequest(BaseModel):
+    """Новый пароль в теле запроса (не в URL — не попадает в логи/историю)."""
+
+    new_password: str = Field(min_length=6)
+
+
 class ChatHistoryItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     role: str
@@ -351,6 +362,8 @@ class VibeCodeRequest(BaseModel):
 
 
 class VibeRunResponse(BaseModel):
+    """Результат прогона вайб-сессии: тесты, пойманные мутанты и разбивка счёта."""
+
     status: str
     results: list[dict]
     mutation: dict | None = None
@@ -380,6 +393,8 @@ class VibeTaskAdminOut(VibeTaskAdminIn):
 
 
 class LLMJobSubmit(BaseModel):
+    """Отправка задачи в LLM-очередь; kind определяет обработчик job'а."""
+
     kind: str = Field(pattern=r"^(assistant_chat|recruiter_chat|recommendation|vibe_chat|retitle|generate_set|submission_feedback)$")
     messages: list[dict] = []
     temperature: float = 0.4
@@ -388,6 +403,8 @@ class LLMJobSubmit(BaseModel):
 
 
 class LLMJobOut(BaseModel):
+    """Статус job'а в очереди; position — место в очереди для pending."""
+
     id: int
     kind: str
     status: str

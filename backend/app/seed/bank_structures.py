@@ -1,3 +1,5 @@
+"""Банк задач: структуры данных — кучи, связные списки, trie, математика (junior/middle/senior)."""
+
 from app.seed.bank_common import T
 
 TASKS = [

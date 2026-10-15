@@ -15,6 +15,7 @@ from app.services.llm_queue import JOB_TIMEOUT_SEC, register_handler
 
 
 async def _plain_chat(job, db: Session) -> str:
+    """chat_completion с параметрами из job.payload и таймаутом JOB_TIMEOUT_SEC."""
     p = job.payload or {}
     return await chat_completion(
         p["messages"],
@@ -26,6 +27,7 @@ async def _plain_chat(job, db: Session) -> str:
 
 
 def _upsert_variant(db: Session, user_id: int, task: Task, variant: dict) -> None:
+    """Создаёт или обновляет вариант задачи пользователя; коммитит."""
     row = db.scalar(
         select(TaskVariant).where(TaskVariant.user_id == user_id, TaskVariant.task_id == task.id)
     )
@@ -51,6 +53,7 @@ async def h_assistant_chat(job, db: Session) -> str:
 
 @register_handler("recruiter_chat")
 async def h_recruiter_chat(job, db: Session) -> str:
+    """Чат с рекрутером: ответ + сохранение в историю RecruiterMessage."""
     from app.models import RecruiterMessage
 
     reply = await _plain_chat(job, db)
@@ -61,6 +64,7 @@ async def h_recruiter_chat(job, db: Session) -> str:
 
 @register_handler("recommendation")
 async def h_recommendation(job, db: Session) -> str:
+    """Рекомендация: новый ответ заменяет старую recommendation в истории."""
     from app.models import RecruiterMessage
 
     reply = await _plain_chat(job, db)
@@ -74,16 +78,28 @@ async def h_recommendation(job, db: Session) -> str:
     return reply
 
 
+def _is_admin(db: Session, user_id: int | None) -> bool:
+    """Владелец job'а — администратор (нужно для привилегированных операций)."""
+    if user_id is None:
+        return False
+    from app.models import User
+
+    u = db.get(User, user_id)
+    return u is not None and u.role == "admin"
+
+
 @register_handler("vibe_chat")
 async def h_vibe_chat(job, db: Session) -> str:
+    """Чат вайб-кодинга: ответ дописывается к сообщениям сессии, prompts_count увеличивается."""
     reply = await _plain_chat(job, db)
     meta = (job.payload or {}).get("meta", {})
     session = db.get(VibeSession, int(meta["session_id"])) if meta.get("session_id") else None
     if session is not None:
+        if session.user_id != job.user_id and not _is_admin(db, job.user_id):
+            raise LLMError("Сессия принадлежит другому пользователю")
         messages = list(session.messages or [])
         messages.append({"role": "assistant", "content": reply})
         session.messages = messages
-        session.prompts_count = (session.prompts_count or 0) + 1
         db.commit()
     return reply
 
@@ -95,6 +111,8 @@ async def h_retitle(job, db: Session) -> str:
     task = db.get(Task, int(meta["task_id"]))
     if task is None:
         raise LLMError("Задача не найдена")
+    if meta.get("target") == "task" and not _is_admin(db, job.user_id):
+        raise LLMError("Обновлять легенду задачи для всех может только администратор")
     variant = await generate_variant(task, db=db, theme=meta.get("theme"))
     if meta.get("target") == "task":
         task.title = variant["title"]
@@ -125,6 +143,8 @@ async def h_submission_feedback(job, db: Session) -> str:
     sub = db.get(Submission, int(meta["submission_id"]))
     if sub is None:
         raise LLMError("Сабмит не найден")
+    if sub.user_id != job.user_id and not _is_admin(db, job.user_id):
+        raise LLMError("Сабмит принадлежит другому пользователю")
     task = db.get(Task, sub.task_id)
     if task is None:
         raise LLMError("Задача не найдена")

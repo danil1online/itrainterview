@@ -1,3 +1,4 @@
+// Теория, часть 1: карточки паттернов (два указателя → BFS) и типы для страницы «Теория».
 export interface TheoryExample {
   title: string;
   statement: string;

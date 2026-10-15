@@ -1,3 +1,7 @@
+/**
+ * Редактор резюме: разделы по шаблону DOCX, фиктивные персональные данные (152-ФЗ), ИИ-сводка навыков.
+ * Сохранение — полный PUT; скрининг с рекрутёром открывается при completion.ready.
+ */
 import { useEffect, useState } from 'react';
 import {
   api, downloadFile, ResumeData, ResumeResponse, SkillsSummary, TechStackItem,
@@ -100,6 +104,7 @@ export default function Resume() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // Загружает резюме + справочник стеков; поверх данных сервера накладываются фиктивные персональные значения.
   const load = () => {
     Promise.all([api<ResumeResponse>('/api/resume'), api<TechStackItem[]>('/api/resume/tech-stack')])
       .then(([res, techList]) => {
@@ -113,6 +118,7 @@ export default function Resume() {
 
   useEffect(() => { load(); }, []);
 
+  // Сохраняет всё резюме одним PUT и перечитывает сводку навыков и незаполненные поля.
   const save = async () => {
     if (!data) return;
     setBusy(true);

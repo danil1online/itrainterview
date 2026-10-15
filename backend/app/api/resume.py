@@ -29,6 +29,7 @@ def get_resume(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Данные резюме, готовность и навыки (с учётом решённых задач); пустые по умолчанию."""
     row = db.scalar(select(Resume).where(Resume.user_id == user.id))
     data = ResumeData.model_validate(row.data) if row else ResumeData()
     patterns, langs = solved_info(db, user)
@@ -47,6 +48,7 @@ def put_resume(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Сохраняет резюме; при изменении данных сбрасывает историю общения с рекрутером (recruiter_reset=true)."""
     row = db.scalar(select(Resume).where(Resume.user_id == user.id))
     dumped = payload.model_dump()
     recruiter_reset = False
@@ -67,6 +69,7 @@ def export_docx(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """DOCX-версия резюме со скиллами; имя файла — ФИО или 'resume'."""
     row = db.scalar(select(Resume).where(Resume.user_id == user.id))
     data = ResumeData.model_validate(row.data) if row else ResumeData()
     patterns, langs = solved_info(db, user)

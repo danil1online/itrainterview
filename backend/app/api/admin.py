@@ -1,3 +1,7 @@
+"""Админ-панель /api/admin, доступ только role=admin.
+
+Пользователи, CRUD задач, результаты/статистика/CSV, системные настройки, управление вайб-задачами."""
+
 import csv
 import io
 from datetime import datetime, timedelta, timezone
@@ -23,6 +27,7 @@ from app.models import (
 )
 from app.schemas import (
     AdminUserUpdate,
+    PasswordResetRequest,
     VibeTaskAdminIn,
     VibeTaskAdminOut,
     ExportCommunityRequest,
@@ -45,10 +50,12 @@ def list_users(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Список пользователей с числом сабмитов и решённых задач; q — поиск по username/email."""
     return _list_users_impl(db, q)
 
 
 def _list_users_impl(db: Session, q: str | None):
+    """Сборка строк списка: LEFT JOIN со счётчиками всех и accepted-сабмитов на пользователя."""
     sub_counts = (
         select(Submission.user_id.label("uid"), func.count().label("cnt"))
         .group_by(Submission.user_id)
@@ -98,11 +105,14 @@ def update_user(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Меняет роль/статус пользователя (commit); 404 — не найден, 400 — попытка заблокировать себя или сменить себе роль."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(404, "Пользователь не найден")
     if user.id == admin.id and payload.is_active is False:
         raise HTTPException(400, "Нельзя заблокировать самого себя")
+    if user.id == admin.id and payload.role is not None:
+        raise HTTPException(400, "Нельзя сменить роль самому себе")
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.role is not None:
@@ -114,10 +124,12 @@ def update_user(
 @router.post("/users/{user_id}/reset_password")
 def reset_password(
     user_id: int,
-    new_password: str,
+    payload: PasswordResetRequest,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Устанавливает новый пароль (мин. 6 символов); 400 — короткий, 404 — нет пользователя."""
+    new_password = payload.new_password
     if len(new_password) < 6:
         raise HTTPException(400, "Пароль слишком короткий")
     user = db.get(User, user_id)
@@ -136,6 +148,7 @@ def admin_tasks(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Все задачи банка (включая неактивные), отсортированы по паттерну и уровню."""
     return db.scalars(select(Task).order_by(Task.pattern, Task.level)).all()
 
 
@@ -145,6 +158,7 @@ def create_task(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Создаёт задачу; 409 — slug уже занят."""
     existing = db.scalar(select(Task).where(Task.slug == payload.slug))
     if existing:
         raise HTTPException(409, "Slug уже используется")
@@ -162,6 +176,7 @@ def update_task(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Полное обновление задачи по id; 404 — нет задачи, 409 — slug занят другой задачей."""
     task = db.get(Task, task_id)
     if task is None:
         raise HTTPException(404, "Задача не найдена")
@@ -181,6 +196,7 @@ def deactivate_task(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Мягкое удаление задачи (is_active=False), сабмиты и варианты сохраняются; 404 — нет задачи."""
     task = db.get(Task, task_id)
     if task is None:
         raise HTTPException(404, "Задача не найдена")
@@ -195,6 +211,7 @@ async def admin_retitle(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Переписывает заголовок/легенду задачи через LLM-очередь (target='task', меняет для всех); асинхронно, возвращает job_id."""
     task = db.get(Task, task_id)
     if task is None:
         raise HTTPException(404, "Задача не найдена")
@@ -223,6 +240,7 @@ def export_community(
 
 
 def _results_query(db: Session, user_id: int | None, task_id: int | None, status: str | None):
+    """Базовый SELECT сабмитов с джойнами на User/Task и опциональными фильтрами; сортировка по новизне."""
     stmt = (
         select(Submission, User.username, Task.slug, Task.level, Task.pattern)
         .join(User, User.id == Submission.user_id)
@@ -246,7 +264,8 @@ def list_results(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    rows = db.execute(_results_query(db, user_id, task_id, status).limit(min(limit, 500))).all()
+    """Сабмиты по фильтрам user/task/status; limit ограничен 1..500."""
+    rows = db.execute(_results_query(db, user_id, task_id, status).limit(max(1, min(limit, 500)))).all()
     return [
         {
             "id": s.id,
@@ -272,6 +291,7 @@ def result_detail(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Детали сабмита: результаты тестов, код, ИИ-фидбек; 404 — не найден."""
     sub = db.get(Submission, submission_id)
     if sub is None:
         raise HTTPException(404, "Отправка не найдена")
@@ -297,6 +317,7 @@ def stats(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Сводка: пользователи/задачи/сабмиты, решённые пары по паттернам и уровням, топ-10, динамика за 14 дней."""
     total_users = db.scalar(select(func.count()).select_from(User))
     total_tasks = db.scalar(select(func.count()).select_from(Task).where(Task.is_active.is_(True)))
     total_subs = db.scalar(select(func.count()).select_from(Submission))
@@ -364,6 +385,7 @@ def export_csv(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Все сабмиты в CSV (разделитель ";"), отдача как attachment без фильтрации."""
     rows = db.execute(_results_query(db, None, None, None)).all()
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";")
@@ -393,6 +415,8 @@ _SETTING_DEFAULTS = {
     "sandbox_timeout_sec": lambda: str(settings.sandbox_timeout_sec),
     "sandbox_memory_mb": lambda: str(settings.sandbox_memory_mb),
     "allow_self_registration": lambda: "true",
+    "llm_max_concurrent": lambda: "1",
+    "sandbox_max_concurrent": lambda: "",
 }
 
 
@@ -401,6 +425,7 @@ def get_settings_admin(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Текущие значения системных настроек с дефолтами из env-конфига."""
     return {key: get_setting(db, key, default()) for key, default in _SETTING_DEFAULTS.items()}
 
 
@@ -410,6 +435,7 @@ def put_settings(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Обновляет настройки; 400 — неизвестный ключ, неверный тип или выход за диапазон (таймаут/память/конкурентность)."""
     for key, value in payload.values.items():
         if key not in EDITABLE_SETTINGS:
             raise HTTPException(400, f"Настройка '{key}' не поддерживается")
@@ -488,6 +514,7 @@ def _vibe_validate(payload: VibeTaskAdminIn) -> None:
 
 
 def _vibe_out(t: VibeTask) -> VibeTaskAdminOut:
+    """VibeTask -> VibeTaskAdminOut; NULL-списки отдаются пустыми."""
     return VibeTaskAdminOut(
         id=t.id, slug=t.slug, task_type=t.task_type, title=t.title,
         description_md=t.description_md, initial_code=t.initial_code,
@@ -498,6 +525,7 @@ def _vibe_out(t: VibeTask) -> VibeTaskAdminOut:
 
 @router.get("/vibe-tasks", response_model=list[VibeTaskAdminOut])
 def admin_vibe_tasks(db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    """Все вайб-задачи, включая отключённые."""
     tasks = db.scalars(select(VibeTask).order_by(VibeTask.id)).all()
     return [_vibe_out(t) for t in tasks]
 
@@ -508,6 +536,7 @@ def admin_vibe_create(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Создаёт вайб-задачу после валидации эталона; 409 — slug занят, 422/502 — из _vibe_validate."""
     if db.scalar(select(VibeTask).where(VibeTask.slug == payload.slug)):
         raise HTTPException(409, "slug уже занят")
     _vibe_validate(payload)
@@ -525,6 +554,7 @@ def admin_vibe_update(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Полное обновление вайб-задачи с повторной валидацией; 404 — нет задачи, 409 — slug занят."""
     t = db.get(VibeTask, task_id)
     if t is None:
         raise HTTPException(404, "Задача не найдена")
@@ -545,6 +575,7 @@ def admin_vibe_delete(
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
+    """Удаляет вайб-задачу; 409, если по ней уже есть сессии (нужно отключить enabled=false)."""
     t = db.get(VibeTask, task_id)
     if t is None:
         raise HTTPException(404, "Задача не найдена")

@@ -1,5 +1,11 @@
+"""Клиент OpenAI-совместимого API (httpx): chat completions, автоопределение модели, разбор JSON из ответа.
+
+Конфигурация — env + настройки БД; при пустой модели определяется через GET /models и кэшируется глобально.
+"""
+
 import json
 import re
+import time
 
 import httpx
 from sqlalchemy.orm import Session
@@ -12,10 +18,13 @@ class LLMError(Exception):
     pass
 
 
-_detected_model: str | None = None
+# Кэш автоопределённой модели: (имя, время определения); TTL — час, чтобы подхватить смену модели на сервере.
+_detected_model: tuple[str, float] | None = None
+_MODEL_CACHE_TTL_SEC = 3600.0
 
 
 def _headers(api_key: str) -> dict:
+    """Заголовки запроса; Authorization подставляется только при непустом api_key."""
     h = {"Content-Type": "application/json"}
     if api_key:
         h["Authorization"] = f"Bearer {api_key}"
@@ -23,6 +32,7 @@ def _headers(api_key: str) -> dict:
 
 
 def effective_llm_config(db: Session | None = None) -> tuple[str, str, str]:
+    """(base_url, model, api_key): env-настройки, при переданной db — с переопределением из БД. base без завершающего '/'."""
     base = settings.llm_base_url
     model = settings.llm_model
     key = settings.llm_api_key
@@ -34,9 +44,10 @@ def effective_llm_config(db: Session | None = None) -> tuple[str, str, str]:
 
 
 async def detect_model(base: str, key: str) -> str:
+    """Определяет первую модель из GET /models; кэш с TTL _MODEL_CACHE_TTL_SEC; при неудаче — LLMError."""
     global _detected_model
-    if _detected_model:
-        return _detected_model
+    if _detected_model and time.monotonic() - _detected_model[1] < _MODEL_CACHE_TTL_SEC:
+        return _detected_model[0]
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(f"{base}/models", headers=_headers(key))
@@ -45,8 +56,11 @@ async def detect_model(base: str, key: str) -> str:
             models = data.get("data") or data.get("models") or []
             if not models:
                 raise LLMError("LLM не вернул список моделей")
-            _detected_model = models[0].get("id") or models[0].get("name")
-            return _detected_model
+            model = models[0].get("id") or models[0].get("name")
+            if not model:
+                raise LLMError("LLM не вернул идентификатор модели")
+            _detected_model = (model, time.monotonic())
+            return model
     except LLMError:
         raise
     except Exception as e:
@@ -60,6 +74,7 @@ async def chat_completion(
     max_tokens: int = 1200,
     timeout_sec: float | None = None,
 ) -> str:
+    """POST /chat/completions, возвращает content ответа; любые ошибки оборачиваются в LLMError. Пустая модель — автоопределение."""
     base, model, key = effective_llm_config(db)
     if not model:
         model = await detect_model(base, key)

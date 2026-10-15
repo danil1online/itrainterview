@@ -1,3 +1,9 @@
+/**
+ * API-клиент и общие типы приложения.
+ * Единая обёртка fetch: Bearer-авторизация, авто-рефреш токена при 401, разбор ошибок FastAPI.
+ */
+// ---------- Типы ответов API ----------
+
 export interface UserInfo {
   id: number;
   email: string;
@@ -78,6 +84,8 @@ export interface AdminUser {
   solved_tasks: number;
 }
 
+// ---------- Токены и HTTP-клиент ----------
+
 const TOKEN_KEY = 'itraint.tokens';
 
 export function getTokens(): { access_token: string; refresh_token: string } | null {
@@ -90,6 +98,7 @@ export function setTokens(tokens: { access_token: string; refresh_token: string 
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+// Базовый fetch: подставляет Bearer-токен и Content-Type для строкового тела.
 async function rawRequest(path: string, opts: RequestInit = {}, token?: string) {
   const headers: Record<string, string> = { ...(opts.headers as Record<string, string>) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -97,22 +106,55 @@ async function rawRequest(path: string, opts: RequestInit = {}, token?: string) 
   return fetch(path, { ...opts, headers });
 }
 
-export async function api<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
+// Single-flight refresh: параллельные 401 дают ОДИН запрос обновления токена.
+let refreshing: Promise<boolean> | null = null;
+
+async function tryRefresh(): Promise<boolean> {
   const tokens = getTokens();
-  let resp = await rawRequest(path, opts, tokens?.access_token);
-  if (resp.status === 401 && tokens?.refresh_token) {
-    const rr = await rawRequest('/api/auth/refresh', {
-      method: 'POST',
-      body: JSON.stringify({ refresh_token: tokens.refresh_token }),
-    });
-    if (rr.ok) {
-      const newTokens = await rr.json();
-      setTokens(newTokens);
-      resp = await rawRequest(path, opts, newTokens.access_token);
-    } else {
+  if (!tokens?.refresh_token) return false;
+  if (!refreshing) {
+    refreshing = (async () => {
+      try {
+        const rr = await rawRequest('/api/auth/refresh', {
+          method: 'POST',
+          body: JSON.stringify({ refresh_token: tokens.refresh_token }),
+        });
+        if (rr.ok) {
+          setTokens(await rr.json());
+          return true;
+        }
+        return false;
+      } finally {
+        refreshing = null;
+      }
+    })();
+  }
+  return refreshing;
+}
+
+// Запрос с авторизацией: при 401 обновляет токен (single-flight) и повторяет;
+// если обновление не удалось, а пользователь был авторизован — сброс токенов и редирект на /login.
+async function authFetch(path: string, opts: RequestInit): Promise<Response> {
+  let resp = await rawRequest(path, opts, getTokens()?.access_token);
+  if (resp.status === 401) {
+    const wasAuthed = !!getTokens()?.access_token;
+    const ok = await tryRefresh();
+    if (ok) {
+      resp = await rawRequest(path, opts, getTokens()?.access_token);
+    } else if (wasAuthed) {
       setTokens(null);
+      window.location.assign('/login');
     }
   }
+  return resp;
+}
+
+/**
+ * Запрос с авторизацией: при 401 один раз пробует обновить токен (refresh) и повторяет запрос.
+ * При ошибке бросает Error с detail из ответа (строка / массив / Pydantic issues).
+ */
+export async function api<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
+  const resp = await authFetch(path, opts);
   if (!resp.ok) {
     let detail = `HTTP ${resp.status}`;
     try {
@@ -129,6 +171,8 @@ export async function api<T = unknown>(path: string, opts: RequestInit = {}): Pr
   if (resp.status === 204) return undefined as T;
   return resp.json();
 }
+
+// ---------- Справочники (языки, уровни, паттерны, статусы) ----------
 
 export const LANGUAGES: Record<string, { monaco: string; label: string; template: string }> = {
   python: {
@@ -263,9 +307,9 @@ export const EMPTY_RESUME: ResumeData = {
   lab_membership: null,
 };
 
+// Скачивает файл как blob и запускает сохранение через временный <a>.
 export async function downloadFile(path: string, filename: string): Promise<void> {
-  const tokens = getTokens();
-  const resp = await rawRequest(path, {}, tokens?.access_token);
+  const resp = await authFetch(path, {});
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const blob = await resp.blob();
   const url = URL.createObjectURL(blob);

@@ -1,8 +1,11 @@
+"""Общие фикстуры тестов: временная БД с сидом, FakeSandbox вместо docker, учётные записи."""
+
 import os
 import tempfile
 
 _tmpdir = tempfile.mkdtemp(prefix="itraint-test-")
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{_tmpdir}/test.sqlite3")
+# Принудительно — чтобы тесты не ушли в реальную БД, если DATABASE_URL стоит в окружении.
+os.environ["DATABASE_URL"] = f"sqlite:///{_tmpdir}/test.sqlite3"
 os.environ["SECRET_KEY"] = "test-secret-key-0123456789abcdef0123456789abcdef"
 os.environ["SEED_ON_START"] = "false"
 os.environ["CORS_ORIGINS"] = ""

@@ -1,3 +1,5 @@
+"""Банк задач: two_pointers, sliding_window, prefix_sum (junior/middle)."""
+
 from app.seed.bank_common import T
 
 TASKS = [

@@ -1,3 +1,5 @@
+"""Банк задач: жадные алгоритмы (junior/middle)."""
+
 from app.seed.bank_common import T
 
 TASKS = [

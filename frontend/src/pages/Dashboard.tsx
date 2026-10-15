@@ -1,3 +1,7 @@
+/**
+ * Главная страница «Банк задач»: список с фильтрами по паттерну/уровню.
+ * Генерация нового комплекта — пакетные LLM-job'ы на легенды (логика и тесты не меняются).
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, LEVEL_LABELS, PATTERN_LABELS, TaskListItem, pollLlmJobs } from '../api';
@@ -24,6 +28,7 @@ export default function Dashboard() {
   const patterns = useMemo(() => Array.from(new Set(tasks.map((t) => t.pattern))).sort(), [tasks]);
   const solvedCount = tasks.filter((t) => t.solved).length;
 
+  // Генерация новых сюжетных легенд для выбранных задач: job'ы в очередь, поллинг до завершения.
   const generateSet = async () => {
     if (genBusy) return;
     const list = filtered.length ? filtered : tasks;

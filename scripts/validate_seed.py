@@ -12,11 +12,13 @@ from app.services.sandbox import DockerSandbox, SandboxError  # noqa: E402
 
 
 def main() -> int:
+    """Прогоняет эталоны всех задач банка в песочнице; печатает провалы, код возврата 1 при ошибках."""
     language = sys.argv[1] if len(sys.argv) > 1 else "python"
     sandbox = DockerSandbox()
     failures = []
 
     def check(task):
+        """Прогоняет эталон одной задачи, провалы собирает в failures."""
         code = task["reference_solution"]
         if language != "python":
             print(f"пропуск {task['slug']}: нет эталона на {language}")

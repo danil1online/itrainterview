@@ -1,3 +1,5 @@
+"""Точка входа FastAPI: lifespan, CORS и подключение роутеров."""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,6 +14,7 @@ from app.services.llm_queue import start_workers, stop_workers
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Создаёт таблицы и запускает воркеров LLM-очереди; после yield — останавливает."""
     # Для dev/тестов (sqlite) таблицы создаются здесь;
     # в production схема применяется через alembic в entrypoint.sh.
     Base.metadata.create_all(bind=engine)
@@ -44,4 +47,5 @@ app.include_router(llm_jobs.router)
 
 @app.get("/api/health")
 def health():
+    """Health-check: статус приложения."""
     return {"status": "ok", "app": settings.app_name}

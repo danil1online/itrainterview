@@ -134,8 +134,7 @@ def test_resume_requires_auth(client):
 
 
 def _ready_recruiter(client, name):
-    """Новый пользователь с готовым резюме; возвращает (hdr, fake_llm-патч через monkeypatch)."""
-    import app.api.recruiter as recruiter_api
+    """Новый пользователь с готовым резюме; возвращает заголовок авторизации."""
 
     hdr = _reg(client, name)
     client.put("/api/resume", json=RESUME_BODY, headers=hdr)

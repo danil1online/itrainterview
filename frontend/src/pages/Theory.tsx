@@ -1,3 +1,4 @@
+// Раздел «Теория»: карточки паттернов (идея, разделы, примеры с кодом) и список литературы.
 import { useState } from 'react';
 import { THEORY_PART1 } from '../theory/data1';
 import { THEORY_PART2 } from '../theory/data2';

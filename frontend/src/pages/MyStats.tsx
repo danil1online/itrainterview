@@ -1,17 +1,24 @@
+// Статистика студента: решено по паттернам/уровням и последние отправки.
 import { useEffect, useMemo, useState } from 'react';
-import { api, LEVEL_LABELS, PATTERN_LABELS, Submission, TaskListItem } from '../api';
+import { api, LEVEL_LABELS, PATTERN_LABELS, STATUS_LABELS, Submission, TaskListItem } from '../api';
 
 export default function MyStats() {
   const [tasks, setTasks] = useState<TaskListItem[]>([]);
   const [subs, setSubs] = useState<Submission[]>([]);
+  const [counts, setCounts] = useState<{ total: number; accepted: number } | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    Promise.all([api<TaskListItem[]>('/api/tasks'), api<Submission[]>('/api/submissions?limit=200')])
-      .then(([t, s]) => { setTasks(t); setSubs(s); })
+    Promise.all([
+      api<TaskListItem[]>('/api/tasks'),
+      api<Submission[]>('/api/submissions?limit=50'), // только для таблицы «последние отправки»
+      api<{ total: number; accepted: number }>('/api/submissions/count'), // точные счётчики без limit
+    ])
+      .then(([t, s, c]) => { setTasks(t); setSubs(s); setCounts(c); })
       .catch((e) => setError(e.message));
   }, []);
 
+  // Агрегация «решено/всего» по паттернам (byLevel ниже — по уровням).
   const byPattern = useMemo(() => {
     const map = new Map<string, { total: number; solved: number }>();
     for (const t of tasks) {
@@ -35,7 +42,6 @@ export default function MyStats() {
   }, [tasks]);
 
   const solvedTotal = tasks.filter((t) => t.solved).length;
-  const acceptedSubs = subs.filter((s) => s.status === 'accepted').length;
   const maxSolved = Math.max(1, ...byPattern.map(([, v]) => v.solved));
 
   return (
@@ -45,8 +51,8 @@ export default function MyStats() {
       <div className="stat-cards">
         <div className="card stat-card"><div className="num">{solvedTotal}</div><div className="muted">задач решено</div></div>
         <div className="card stat-card"><div className="num">{tasks.length}</div><div className="muted">всего в банке</div></div>
-        <div className="card stat-card"><div className="num">{subs.length}</div><div className="muted">всего отправок</div></div>
-        <div className="card stat-card"><div className="num">{acceptedSubs}</div><div className="muted">принятых решений</div></div>
+        <div className="card stat-card"><div className="num">{counts?.total ?? subs.length}</div><div className="muted">всего отправок</div></div>
+        <div className="card stat-card"><div className="num">{counts?.accepted ?? 0}</div><div className="muted">принятых решений</div></div>
       </div>
 
       <div className="card">
@@ -80,7 +86,7 @@ export default function MyStats() {
               <tr key={s.id}>
                 <td>{tasks.find((t) => t.slug === s.task_slug)?.title || `#${s.task_id}`}</td>
                 <td>{s.language}</td>
-                <td><span className={`badge ${s.status === 'accepted' ? 'ok' : 'fail'}`}>{s.status}</span></td>
+                <td><span className={`badge ${s.status === 'accepted' ? 'ok' : 'fail'}`}>{STATUS_LABELS[s.status] || s.status}</span></td>
                 <td>{s.passed_count}/{s.total_count}</td>
                 <td className="muted">{new Date(s.created_at).toLocaleString('ru-RU')}</td>
               </tr>

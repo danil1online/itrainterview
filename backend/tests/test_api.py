@@ -1,3 +1,5 @@
+"""Тесты API задач: список/фильтры, run/submit, история, ИИ-помощник и фидбек."""
+
 import json
 
 def test_task_list_and_filters(client, student_headers):
@@ -140,6 +142,42 @@ def test_generate_set_batch(client, student_headers, monkeypatch):
     d2 = client.get("/api/tasks/merge-intervals", headers=student_headers).json()
     assert d1["legend"].startswith("Новый сюжет про two-sum-ii")
     assert d2["legend"].startswith("Новый сюжет про merge-intervals")
+
+
+def test_generate_set_fallback_skips_inactive(client, admin_headers, student_headers, monkeypatch):
+    """Fallback «всех задач» не включает деактивированные (мягко удалённые)."""
+    from tests.conftest import wait_job
+    import app.services.llm_handlers as handlers
+    from app.db import SessionLocal
+    from app.models import Task
+
+    async def fake_generate(task, db=None, theme=None):
+        return {"title": f"Сюжет: {task.slug}", "legend": f"Новый сюжет про {task.slug}. Формат ввода тот же."}
+
+    monkeypatch.setattr(handlers, "generate_variant", fake_generate)
+
+    # оставляем активными только две задачи — остальные мягко удаляем
+    db = SessionLocal()
+    keep = {t.id for t in db.query(Task).all() if t.slug in ("two-sum-ii", "merge-intervals")}
+    for t in db.query(Task).all():
+        if t.id not in keep:
+            t.is_active = False
+    db.commit()
+    db.close()
+
+    r = client.post("/api/tasks/generate-set", json={}, headers=student_headers)
+    assert r.status_code == 200
+    job_ids = r.json()["job_ids"]
+    assert len(job_ids) == 2
+    for jid in job_ids:
+        assert wait_job(client, student_headers, jid)["status"] == "done"
+
+
+def test_limit_clamped_not_500(client, student_headers):
+    """Отрицательный limit не даёт 500 — клампится к 1."""
+    assert client.get("/api/assistant/history?task_slug=two-sum-ii&limit=-1", headers=student_headers).status_code == 200
+    assert client.get("/api/submissions?limit=-1", headers=student_headers).status_code == 200
+    assert client.get("/api/recruiter/history?limit=-5", headers=student_headers).status_code == 200
 
 
 def test_retitle_llm_error(client, student_headers, monkeypatch):

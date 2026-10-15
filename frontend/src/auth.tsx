@@ -1,3 +1,7 @@
+/**
+ * Контекст авторизации: текущий пользователь и login/register/logout.
+ * При монтировании восстанавливает сессию из localStorage через /api/auth/me (при ошибке — сброс токенов).
+ */
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { api, getTokens, setTokens, UserInfo } from './api';
 
@@ -15,6 +19,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Восстановление сессии: если токены есть — запрашиваем профиль, при ошибке очищаем их.
   useEffect(() => {
     if (!getTokens()) {
       setLoading(false);
@@ -26,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
+  // Логин: получаем пару токенов и сразу загружаем профиль.
   const login = async (loginStr: string, password: string) => {
     const tokens = await api<{ access_token: string; refresh_token: string }>('/api/auth/login', {
       method: 'POST',
@@ -35,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(await api<UserInfo>('/api/auth/me'));
   };
 
+  // Регистрация: как логин — сервер сразу выдаёт токены.
   const register = async (email: string, username: string, password: string) => {
     const tokens = await api<{ access_token: string; refresh_token: string }>('/api/auth/register', {
       method: 'POST',

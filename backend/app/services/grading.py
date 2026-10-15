@@ -1,3 +1,8 @@
+"""Проверка сабмитов: прогон тестов в песочнице, сохранение результата, ИИ-фидбек по ошибкам.
+
+Лимиты timeout/памяти берутся из настроек БД с клампингом; ожидаемый вывод скрытых тестов студенту не отдаётся.
+"""
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -7,6 +12,7 @@ from app.services.sandbox import RunOutcome, get_sandbox
 
 
 def _int_setting(db: Session, key: str, default: int) -> int:
+    """Целочисленная настройка из БД; при некорректном значении — default."""
     try:
         return int(get_setting(db, key, str(default)))
     except ValueError:
@@ -14,17 +20,20 @@ def _int_setting(db: Session, key: str, default: int) -> int:
 
 
 def sandbox_limits(db: Session) -> tuple[int, int]:
+    """(timeout_sec, memory_mb): кламп до [1..60] c и [64..2048] МБ соответственно."""
     timeout = _int_setting(db, "sandbox_timeout_sec", settings.sandbox_timeout_sec)
     memory = _int_setting(db, "sandbox_memory_mb", settings.sandbox_memory_mb)
     return max(1, min(timeout, 60)), max(64, min(memory, 2048))
 
 
 def run_tests(db: Session, language: str, code: str, tests: list[dict]) -> RunOutcome:
+    """Прогон тестов в песочнице с лимитами из настроек; возвращает RunOutcome."""
     timeout, memory = sandbox_limits(db)
     return get_sandbox().run(language, code, tests, timeout_sec=timeout, memory_mb=memory)
 
 
 def outcome_to_dict(outcome: RunOutcome) -> dict:
+    """Сериализует RunOutcome для API/БД; expected_stdout скрытых тестов не включается."""
     return {
         "status": outcome.status,
         "passed_count": sum(1 for r in outcome.results if r.passed),
@@ -48,6 +57,7 @@ def outcome_to_dict(outcome: RunOutcome) -> dict:
 def create_submission(
     db: Session, user: User, task: Task, language: str, code: str, outcome: RunOutcome
 ) -> Submission:
+    """Создаёт и коммитит запись Submission по результату прогона."""
     sub = Submission(
         user_id=user.id,
         task_id=task.id,
@@ -79,7 +89,8 @@ FEEDBACK_SYSTEM = (
 
 async def generate_submission_feedback(
     db: Session, sub: Submission, task: Task
-) -> str | None:
+) -> str:
+    """Генерирует разбор ошибок (до 5 проваленных тестов в промпте), сохраняет в sub.ai_feedback; при сбое LLM — заглушка-текст."""
     failed = [r for r in sub.results if not r.get("passed")]
     prompt = (
         f"Задача: {task.title} (паттерн: {task.pattern}, уровень: {task.level})\n"

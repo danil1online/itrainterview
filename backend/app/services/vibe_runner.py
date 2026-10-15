@@ -35,6 +35,7 @@ class CaseResult:
 # ---------------------------------------------------------------- drivers
 
 def _assert_driver(cases: list[dict]) -> str:
+    """Генерирует python-драйвер: прогоняет скрытые кейсы и печатает строки T<i> PASS/FAIL."""
     lines = [
         "",
         "# ==== скрытые тесты (система) ====",
@@ -82,6 +83,7 @@ for __i, (__name, __fn) in enumerate(__cases):
 
 
 def _parse_t_lines(stdout: str, names: list[str] | None = None) -> tuple[list[CaseResult], dict[int, str]]:
+    """Разбирает T-строки stdout в CaseResult; names=None — discovery-режим (имя берётся из строки)."""
     found: dict[int, tuple[bool, str]] = {}
     discovered: dict[int, str] = {}
     for raw in stdout.splitlines():
@@ -118,6 +120,7 @@ def _parse_t_lines(stdout: str, names: list[str] | None = None) -> tuple[list[Ca
 
 
 def _run_composed(code: str) -> dict:
+    """Прогон собранного скрипта в песочнице (только python)."""
     return get_sandbox().run_script("python", code)
 
 
@@ -150,7 +153,11 @@ def run_mutation(student_code: str, reference_code: str, mutants: list[dict]) ->
         out["note"] = "Не найден маркер «" + MARKER + "» — не удалось отделить ваши тесты."
         return out
 
-    status, results = _run_discovery(student_code)
+    # Проверяем тесты на ЭТАЛОНЕ (функция выше маркера у студента могла быть изменена):
+    # на корректном коде все тесты обязаны пройти.
+    ref_func = reference_code.split(MARKER, 1)[0].rstrip()
+    tests_part = MARKER + student_code.split(MARKER, 1)[1]
+    status, results = _run_discovery(ref_func + "\n\n" + tests_part)
     out["tests_found"] = len(results)
     out["orig_results"] = [asdict(r) for r in results]
     if not results:
@@ -167,16 +174,15 @@ def run_mutation(student_code: str, reference_code: str, mutants: list[dict]) ->
         return out
     out["orig_ok"] = True
 
-    ref_part = student_code.split(MARKER, 1)[0]
-    tests_part = MARKER + student_code.split(MARKER, 1)[1]
     for mut in mutants or []:
         composed = (mut.get("code") or "") + "\n\n" + tests_part + _DISCOVERY_DRIVER
         mres = _run_composed(composed)
-        m_results, _ = _parse_t_lines(mres["stdout"], None)
-        if not m_results and mres["status"] != "ok":
-            caught = False
-            note = "сбой прогона мутанта"
+        if mres["status"] != "ok":
+            # Мутант упал или завис — программа не отработала чисто, это и есть поимка
+            caught = True
+            note = "мутант не завершился (краш/таймаут)"
         else:
+            m_results, _ = _parse_t_lines(mres["stdout"], None)
             caught = any(not r.passed for r in m_results) or "NO TESTS FOUND" in mres["stdout"]
             note = ""
         out["mutants"].append(
@@ -188,6 +194,7 @@ def run_mutation(student_code: str, reference_code: str, mutants: list[dict]) ->
 
 
 def _run_discovery(code: str) -> tuple[str, list[CaseResult]]:
+    """Прогон test_* функций студента через discovery-драйвер."""
     res = _run_composed(code + _DISCOVERY_DRIVER)
     results, _ = _parse_t_lines(res["stdout"], None)
     return res["status"], results
@@ -207,6 +214,7 @@ def max_nesting(code: str) -> int | None:
     best = 0
 
     def walk(node, depth: int) -> None:
+        """Обход AST-узлов с учётом максимальной глубины if/for/while."""
         nonlocal best
         for child in ast.iter_child_nodes(node):
             if isinstance(child, _DECISION_NODES):

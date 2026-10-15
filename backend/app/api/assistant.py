@@ -1,3 +1,5 @@
+"""ИИ-помощник по задаче /api/assistant: чат через LLM-очередь и история диалога."""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -47,6 +49,7 @@ async def chat(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Сохраняет последнее сообщение студента в историю и ставит job 'assistant_chat'; ответ придёт асинхронно по job_id. 404 — нет задачи."""
     task = get_task_or_404(db, payload.task_slug)
     history = [{"role": m.role, "content": m.content} for m in payload.messages]
     messages = build_chat_messages(
@@ -75,11 +78,12 @@ def history(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """История диалога по задаче в хронологическом порядке (limit 1..100); 404 — нет задачи."""
     task = get_task_or_404(db, task_slug, active_only=False)
     rows = db.scalars(
         select(ChatMessage)
         .where(ChatMessage.user_id == user.id, ChatMessage.task_id == task.id)
         .order_by(ChatMessage.created_at.desc())
-        .limit(min(limit, 100))
+        .limit(max(1, min(limit, 100)))
     ).all()
     return list(reversed(rows))

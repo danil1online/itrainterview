@@ -1,3 +1,5 @@
+"""Банк задач: динамическое программирование (junior/middle/senior)."""
+
 from app.seed.bank_common import T
 
 TASKS = [

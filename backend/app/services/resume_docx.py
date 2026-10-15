@@ -11,6 +11,7 @@ RED = RGBColor(0xFF, 0x00, 0x00)
 
 
 def _add_heading(doc: Document, text: str) -> None:
+    """Заголовок раздела: bold 13pt с отступом сверху."""
     p = doc.add_paragraph()
     run = p.add_run(text)
     run.bold = True
@@ -19,6 +20,7 @@ def _add_heading(doc: Document, text: str) -> None:
 
 
 def _add_kv(doc: Document, label: str, value: str, red: bool = False) -> None:
+    """Строка «Метка: значение»; пустые значения пропускаются, red — для предзаполненных полей."""
     if not (value or "").strip():
         return
     p = doc.add_paragraph()
@@ -47,6 +49,7 @@ def _add_name_runs(p, data: ResumeData, bold: bool = False, size: Pt | None = No
 
 
 def build_resume_docx(data: ResumeData, skills: dict) -> bytes:
+    """Собирает документ резюме из данных и агрегированных навыков; возвращает .docx байтами."""
     doc = Document()
 
     title = doc.add_paragraph()

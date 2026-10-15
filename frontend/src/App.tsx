@@ -1,3 +1,7 @@
+/**
+ * Корневой компонент: маршрутизация страниц и защита роутов по роли.
+ * Shell — верхняя навигация; Protected — редирект на /login, /admin/* только для админа.
+ */
 import { Link, Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth';
 import Login from './pages/Login';
@@ -10,6 +14,7 @@ import Resume from './pages/Resume';
 import Recruiter from './pages/Recruiter';
 import Admin from './pages/Admin';
 
+// Оболочка с шапкой и навигацией; ссылка «Администрирование» видна только админу.
 function Shell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   return (
@@ -39,6 +44,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Пускает страницу после загрузки auth; при admin=true — только для роли admin, иначе редирект на /.
 function Protected({ children, admin }: { children: React.ReactNode; admin?: boolean }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="center muted">Загрузка…</div>;

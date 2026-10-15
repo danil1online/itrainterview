@@ -1,5 +1,7 @@
+"""Запуск кода и сабмиты (/api/tasks/*/run|submit), история сабмитов, повторный ИИ-разбор."""
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +22,7 @@ router = APIRouter(prefix="/api", tags=["runs"])
 
 
 def _sample_tests(task: Task) -> list[dict]:
+    """Тесты для быстрого прогона: помеченные sample или первый из списка."""
     samples = [t for t in task.tests if t.get("sample")]
     return samples or task.tests[:1]
 
@@ -67,6 +70,7 @@ async def run_code(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Быстрый прогон на sample-тестах в песочнице (threadpool); 503 — сбой песочницы; результат пишется в RunLog для ИИ-контекста."""
     task = get_task_or_404(db, slug)
     try:
         outcome = await run_in_threadpool(
@@ -86,6 +90,7 @@ async def submit_code(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Полная проверка всеми тестами + сабмит; при want_feedback и не-accepted ставит job разбора без блокировки ответа; 503 — песочница."""
     task = get_task_or_404(db, slug)
     try:
         outcome = await run_in_threadpool(
@@ -114,12 +119,13 @@ def my_submissions(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Сабмиты текущего пользователя, опционально по задаче (limit 1..200); 404 — нет задачи."""
     stmt = select(Submission).where(Submission.user_id == user.id)
     if task_slug:
         task = get_task_or_404(db, task_slug, active_only=False)
         stmt = stmt.where(Submission.task_id == task.id)
     rows = db.scalars(
-        stmt.order_by(Submission.created_at.desc()).limit(min(limit, 200))
+        stmt.order_by(Submission.created_at.desc()).limit(max(1, min(limit, 200)))
     ).all()
     slugs = {t.id: t.slug for t in db.scalars(select(Task).where(Task.id.in_([r.task_id for r in rows]))).all()} if rows else {}
     out = []
@@ -130,12 +136,31 @@ def my_submissions(
     return out
 
 
+@router.get("/submissions/count")
+def my_submissions_count(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Точные счётчики сабмитов студента (всего / принятых) — без ограничения limit."""
+    total = db.scalar(select(func.count()).select_from(Submission).where(Submission.user_id == user.id)) or 0
+    accepted = (
+        db.scalar(
+            select(func.count())
+            .select_from(Submission)
+            .where(Submission.user_id == user.id, Submission.status == "accepted")
+        )
+        or 0
+    )
+    return {"total": total, "accepted": accepted}
+
+
 @router.get("/submissions/{submission_id}", response_model=SubmissionOut)
 def get_submission(
     submission_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Один сабмит: свой или чужой при role=admin; иначе 404."""
     sub = db.get(Submission, submission_id)
     if sub is None or (sub.user_id != user.id and user.role != "admin"):
         raise HTTPException(404, "Отправка не найдена")
@@ -151,6 +176,7 @@ async def regenerate_feedback(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Повторный ИИ-разбор сабмита через очередь (job 'submission_feedback'); чужие — только admin, иначе 404."""
     sub = db.get(Submission, submission_id)
     if sub is None or (sub.user_id != user.id and user.role != "admin"):
         raise HTTPException(404, "Отправка не найдена")

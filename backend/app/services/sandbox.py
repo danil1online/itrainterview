@@ -1,3 +1,8 @@
+"""Docker-песочница: каждый тест выполняется в отдельном контейнере — без сети, read-only ФС, лимитами CPU/RAM/pids.
+
+Языки python/javascript/java/cpp на собственных образах; параллельность ограничена семафором (sandbox_max_concurrent).
+"""
+
 import os
 import shutil
 import threading
@@ -21,6 +26,7 @@ _sem_lock = threading.Lock()
 
 
 def _containers_limit() -> int:
+    """Лимит одновременных контейнеров: настройка sandbox_max_concurrent (1–32), иначе min(cpu_count, 8)."""
     default = max(1, min(os.cpu_count() or 4, 8))
     try:
         from app.db import SessionLocal
@@ -51,6 +57,7 @@ def slot_acquire() -> None:
 
 
 def slot_release() -> None:
+    """Освобождает слот контейнера; без эффекта, если семафор ещё не инициализирован."""
     global _sem
     if _sem is not None:
         _sem.release()
@@ -110,6 +117,7 @@ MAX_OUTPUT_CHARS = 4096
 
 
 def normalize_output(s: str) -> str:
+    """Нормализация вывода для сравнения: CRLF→LF, хвостовые пробелы строк и пустые строки в конце убираются."""
     lines = [line.rstrip() for line in s.replace("\r\n", "\n").split("\n")]
     while lines and lines[-1] == "":
         lines.pop()
@@ -120,6 +128,7 @@ class DockerSandbox:
     """Запуск каждого теста в отдельном контейнере: без сети, с лимитами CPU/RAM/pids."""
 
     def _client(self):
+        """Docker-клиент из окружения; SandboxError, если пакет не установлен или Docker недоступен."""
         try:
             import docker
         except ImportError as e:  # pragma: no cover
@@ -132,6 +141,7 @@ class DockerSandbox:
     def _run_container(
         self, spec: LanguageSpec, cmd: str, host_dir: str, timeout: int, memory_mb: int
     ):
+        """Запускает detached-контейнер с лимитами (без сети, read_only, tmpfs /tmp, user 65534)."""
         client = self._client()
         try:
             container = client.containers.run(
@@ -160,13 +170,14 @@ class DockerSandbox:
 
     @staticmethod
     def _wait_container(container, timeout: int) -> tuple[int | None, int]:
-        """Возвращает (exit_code или None при таймауте, время в мс)."""
+        """Возвращает (exit_code или None при таймауте, время в мс); сбой docker-демона — SandboxError."""
         start = time.monotonic()
         try:
+            # python-docker при истечении timeout возвращает {"StatusCode": None, "Error": {...}}
             result = container.wait(timeout=timeout)
-            code = result.get("StatusCode", -1)
-        except Exception:
-            code = None
+            code = result.get("StatusCode") if isinstance(result, dict) else None
+        except Exception as e:
+            raise SandboxError(f"Сбой взаимодействия с docker-демоном (не таймаут): {e}") from e
         finally:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             try:
@@ -183,6 +194,7 @@ class DockerSandbox:
         timeout_sec: int | None = None,
         memory_mb: int | None = None,
     ) -> RunOutcome:
+        """Прогоняет все тесты последовательно, каждый в отдельном контейнере; временный каталог удаляется в finally."""
         spec = LANGUAGES.get(language)
         if spec is None:
             raise SandboxError(f"Неподдерживаемый язык: {language}")
@@ -347,6 +359,7 @@ _sandbox: DockerSandbox | None = None
 
 
 def get_sandbox() -> DockerSandbox:
+    """Синглтон экземпляра DockerSandbox."""
     global _sandbox
     if _sandbox is None:
         _sandbox = DockerSandbox()

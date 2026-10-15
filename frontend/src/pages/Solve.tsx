@@ -1,3 +1,7 @@
+/**
+ * Страница задачи: условие, Monaco-редактор, запуск на примерах / отправка на все тесты, чат с ИИ-помощником.
+ * Разбор от ИИ и новые легенды идут через LLM-очередь (pollLlmJob).
+ */
 import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { useParams } from 'react-router-dom';
@@ -41,6 +45,7 @@ export default function Solve() {
     setCode(LANGUAGES[lang].template);
   };
 
+  // Быстрый прогон только на примерах из условия — в статистику не засчитывается.
   const run = async () => {
     setBusy('run'); setError(''); setSubmission(null);
     try {
@@ -48,6 +53,7 @@ export default function Solve() {
     } catch (e: any) { setError(e.message); } finally { setBusy(''); }
   };
 
+  // Полная проверка по всем тестам (включая скрытые); при feedback_job_id ждём разбор ИИ поллингом и перечитываем сабмит.
   const submit = async () => {
     setBusy('submit'); setError(''); setRunResult(null);
     try {
@@ -69,6 +75,7 @@ export default function Solve() {
     } catch (e: any) { setError(e.message); } finally { setBusy(''); setQueueInfo(''); }
   };
 
+  // Новая легенда от ИИ: job в очереди, результат приходит JSON {title, legend}.
   const retitle = async () => {
     setBusy('retitle'); setError('');
     try {
@@ -80,6 +87,7 @@ export default function Solve() {
     } catch (e: any) { setError(e.message); } finally { setBusy(''); setQueueInfo(''); }
   };
 
+  // Вопрос помощнику (режим hint/explain): последние 10 сообщений + текущий код уходят в LLM-очередь.
   const sendChat = async () => {
     const text = chatInput.trim();
     if (!text || busy) return;

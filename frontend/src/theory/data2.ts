@@ -1,3 +1,4 @@
+// Теория, часть 2: карточки паттернов (ДП, жадные, куча, trie, математика, связные списки).
 import type { TheoryPattern } from './data1';
 
 export const THEORY_PART2: TheoryPattern[] = [

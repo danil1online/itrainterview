@@ -1,8 +1,9 @@
-"""Тесты LLM-очереди (job + поллинг) и семафора песочницы."""
+"""Тесты LLM-очереди (job + поллинг), семафора песочницы и безопасности job'ов."""
 
 import asyncio
 import threading
 import time
+import uuid
 
 
 def _submit(client, hdr, content, kind="assistant_chat"):
@@ -193,6 +194,24 @@ def _reg(client, name):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+def _vibe_task_payload():
+    """Минимальная вайб-задача (bugfix) — эталон проходит в FakeSandbox."""
+    return {
+        "slug": "q-esc-vibe-" + uuid.uuid4().hex[:6],
+        "task_type": "bugfix",
+        "title": "Тест null",
+        "description_md": "Добейся обработки None.",
+        "initial_code": "def f(x):\n    return x + 1\n",
+        "hidden_tests": [
+            {"name": "обычный", "code": "assert f(1) == 2"},
+            {"name": "None как нуль", "code": "assert f(None) == 0"},
+        ],
+        "reference_solution": "def f(x):\n    if x is None:\n        return 0\n    return x + 1\n",
+        "mutants": [],
+        "min_mutants_caught": 0,
+    }
+
+
 def test_sandbox_slot_limit(client, monkeypatch):
     """Семафор: при лимите 1 второй acquire ждёт освобождения слота."""
     from app.db import SessionLocal
@@ -226,3 +245,76 @@ def test_sandbox_slot_limit(client, monkeypatch):
     assert not got_second.wait(1.0), "второй acquire не заблокирован при лимите 1"
     sandbox.slot_release()
     assert got_second.wait(3.0), "освобождение слота не разблокировало ожидание"
+
+
+# ------------------------------------------------------------------ безопасность очереди
+
+
+def test_job_escalation_blocked(client, admin_headers, monkeypatch):
+    """Прямой сабмит job'а не даёт студенту чужих привилегий: retitle target=task, чужая vibe-сессия, чужой сабмит."""
+    from tests.conftest import wait_job
+    import app.services.llm_handlers as handlers
+    from app.db import SessionLocal
+    from app.models import Task
+
+    async def fake_generate(task, db=None, theme=None):
+        return {"title": "Взлом", "legend": "Легенда после взлома. Формат ввода тот же."}
+
+    monkeypatch.setattr(handlers, "generate_variant", fake_generate)
+    async def fake_chat(messages, db=None, temperature=0.4, max_tokens=1200, timeout_sec=None):
+        return "ответ"
+
+    monkeypatch.setattr(handlers, "chat_completion", fake_chat)
+
+    hdr = _reg(client, "q-esc-student")
+
+    # 1) студент пытается перезаписать легенду задачи для всех (target=task)
+    db = SessionLocal()
+    tid = db.query(Task).filter_by(slug="two-sum-ii").first().id
+    db.close()
+    r = client.post("/api/llm/jobs", json={"kind": "retitle", "meta": {"task_id": tid, "target": "task"}}, headers=hdr)
+    assert r.status_code == 202
+    job = wait_job(client, hdr, r.json()["id"], timeout=30)
+    assert job["status"] == "error" and "администратор" in (job["error"] or "")
+    detail = client.get("/api/tasks/two-sum-ii", headers=hdr).json()
+    assert not detail["legend"].startswith("Легенда после взлома")
+
+    # 2) чужая vibe-сессия: админ создаёт задачу, второй студент — сессию; наш студент шлёт в неё сообщение
+    vt = client.post("/api/admin/vibe-tasks", json=_vibe_task_payload(), headers=admin_headers).json()
+    hdr_other = _reg(client, "q-esc-other")
+    other_session = client.post(f"/api/vibe/tasks/{vt['id']}/session", headers=hdr_other).json()
+    r = client.post(
+        "/api/llm/jobs",
+        json={"kind": "vibe_chat", "messages": [{"role": "user", "content": "привет"}], "meta": {"session_id": other_session["id"]}},
+        headers=hdr,
+    )
+    assert r.status_code == 202
+    job = wait_job(client, hdr, r.json()["id"], timeout=30)
+    assert job["status"] == "error" and "другому пользователю" in (job["error"] or "")
+
+    # 3) разбор чужого сабмита: второй студент отправляет код, наш — просит job'ом разбор его сабмита
+    other_sub = client.post(
+        "/api/tasks/two-sum-ii/submit",
+        json={"language": "python", "code": "print('oops')", "want_feedback": False},
+        headers=hdr_other,
+    ).json()
+    r = client.post("/api/llm/jobs", json={"kind": "submission_feedback", "meta": {"submission_id": other_sub["id"]}}, headers=hdr)
+    assert r.status_code == 202
+    job = wait_job(client, hdr, r.json()["id"], timeout=30)
+    assert job["status"] == "error" and "другому пользователю" in (job["error"] or "")
+
+
+def test_job_internal_error_not_stuck(client, student_headers, monkeypatch):
+    """Сбой хендлера не LLMError: job уходит в error, а не зависает в running."""
+    from tests.conftest import wait_job
+    import app.services.llm_handlers as handlers
+
+    async def broken(messages, db=None, temperature=0.4, max_tokens=1200, timeout_sec=None):
+        raise ValueError("баг хендлера")
+
+    monkeypatch.setattr(handlers, "chat_completion", broken)
+    r = client.post("/api/llm/jobs", json={"kind": "assistant_chat", "messages": [{"role": "user", "content": "тест"}]}, headers=student_headers)
+    assert r.status_code == 202
+    job = wait_job(client, student_headers, r.json()["id"], timeout=30)
+    assert job["status"] == "error"
+    assert "Внутренняя ошибка" in (job["error"] or "") and "баг хендлера" in (job["error"] or "")

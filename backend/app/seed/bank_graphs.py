@@ -1,3 +1,5 @@
+"""Банк задач: графы — BFS и DFS (junior/middle)."""
+
 from app.seed.bank_common import T
 
 TASKS = [

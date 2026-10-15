@@ -16,11 +16,13 @@ from app.services.sandbox import SandboxError, get_sandbox
 
 class ContributeError(Exception):
     def __init__(self, issues: list[str]):
+        """issues — список проблем; сообщение — их конкатенация через '; '."""
         self.issues = issues
         super().__init__("; ".join(issues))
 
 
 def _known_patterns() -> set[str]:
+    """Набор известных паттернов из seed-банка TASK_SEED."""
     return {t["pattern"] for t in TASK_SEED}
 
 
@@ -34,6 +36,10 @@ def validate_task(task: Task) -> list[str]:
         issues.append("Нужно минимум 2 теста: пример (sample) и хотя бы один скрытый")
     if not any(t.get("sample") for t in task.tests):
         issues.append("Нужен тест с sample=true — он показывается студенту как пример из условия")
+    for i, t in enumerate(task.tests):
+        missing = [k for k in ("name", "stdin", "expected_stdout") if k not in t]
+        if missing:
+            issues.append(f"Тест #{i + 1}: не заполнены поля {', '.join(missing)}")
     if not task.reference_solution.strip():
         issues.append("Эталонное решение обязательно: без него вклад нельзя проверить в песочнице")
     return issues
@@ -140,6 +146,7 @@ seeder идемпотентен по slug (новые задачи добавл�
 
 
 def export_task(task: Task, author: str) -> dict:
+    """Валидирует задачу и эталонное решение, возвращает файл экспорта + инструкцию; при проблемах — ContributeError."""
     issues = validate_task(task)
     if not issues:
         issues.extend(check_reference(task))

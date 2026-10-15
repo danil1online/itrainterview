@@ -42,7 +42,9 @@ HANDLERS: dict[str, JobHandler] = {}
 
 
 def register_handler(kind: str):
+    """Декоратор регистрации асинхронного обработчика для kind в HANDLERS."""
     def deco(fn: JobHandler) -> JobHandler:
+        """Вешает обработчик в HANDLERS и возвращает функцию без изменений."""
         HANDLERS[kind] = fn
         return fn
 
@@ -50,10 +52,12 @@ def register_handler(kind: str):
 
 
 def utcnow() -> datetime:
+    """Текущее время UTC с таймзоной."""
     return datetime.now(timezone.utc)
 
 
 def _max_concurrent(db: Session | None = None) -> int:
+    """Число параллельных воркеров: настройка llm_max_concurrent, кламп [1..32], по умолчанию 1."""
     raw = get_setting(db, "llm_max_concurrent", "") if db is not None else ""
     try:
         return max(1, min(32, int(raw)))
@@ -71,6 +75,7 @@ def submit_job(
     max_tokens: int = 1200,
     meta: dict | None = None,
 ) -> LLMJob:
+    """Создаёт и коммитит pending-job; неизвестный kind — ValueError."""
     if kind not in JOB_KINDS:
         raise ValueError(f"Неизвестный kind job'а: {kind}")
     job = LLMJob(
@@ -149,6 +154,14 @@ async def process_next_job() -> bool:
                     logger.warning("llm_job %s (%s) failed after %d attempts: %s", job.id, job.kind, attempts, e)
                     return True
                 await asyncio.sleep(RETRY_BACKOFFS[attempts - 1])
+            except Exception as e:
+                # Сбой не модели (баг хендлера, БД): ретраи бессмысленны — сразу error, job не зависает в running
+                logger.exception("llm_job %s (%s) internal error", job.id, job.kind)
+                job.status = "error"
+                job.error = f"Внутренняя ошибка: {e}"
+                job.finished_at = utcnow()
+                db.commit()
+                return True
     finally:
         db.close()
 
@@ -157,6 +170,7 @@ _workers: list[asyncio.Task] = []
 
 
 async def _worker_loop() -> None:
+    """Зацикленный воркер: забирает задачи с паузой 0.5 c; ошибки логирует и не умирает."""
     while True:
         try:
             await process_next_job()
@@ -166,6 +180,7 @@ async def _worker_loop() -> None:
 
 
 def start_workers() -> None:
+    """Crash recovery ('running' → 'pending') и запуск N воркеров; повторный вызов ничего не делает."""
     global _workers
     if _workers:
         return
@@ -188,6 +203,7 @@ def start_workers() -> None:
 
 
 def stop_workers() -> None:
+    """Отменяет все воркеры и очищает список."""
     global _workers
     for w in _workers:
         w.cancel()

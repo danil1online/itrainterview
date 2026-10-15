@@ -123,6 +123,7 @@ GENERIC_POSITION = "Инженер-программист"
 
 
 def _norm(s: str) -> str:
+    """Нижний регистр + ё→е для нечувствительного сопоставления ключевых слов."""
     return s.lower().replace("ё", "е")
 
 
@@ -134,6 +135,7 @@ def recommend_position(pool: list[str]) -> dict:
     text = [_norm(p) for p in pool]
 
     def score(keywords: list[str]) -> list[str]:
+        """Совпавшие по подстроке ключевые слова."""
         hits = []
         for kw in keywords:
             if any(kw in t for t in text):
@@ -142,11 +144,10 @@ def recommend_position(pool: list[str]) -> dict:
 
     best_title, best_hits = GENERIC_POSITION, []
     best_score = 0
-    fe_hits = score(dict(POSITIONS)["Frontend-разработчик"])
-    be_hits = score(dict(POSITIONS)["Backend-разработчик"])
+    pos_by_title = dict(POSITIONS)
+    fe_hits = score(pos_by_title["Frontend-разработчик"])
+    be_hits = score(pos_by_title["Backend-разработчик"])
     for title, keywords in POSITIONS:
-        if title in ("Fullstack-разработчик",):
-            continue
         hits = score(keywords)
         s = len(hits)
         if s > best_score:
@@ -226,6 +227,7 @@ def resume_to_text(data: ResumeData, skills: dict) -> str:
         lines.append(f"Образование: {edu}")
 
     def section(title: str, rows: list[str]):
+        """Добавляет секцию со строками-маркерами; пустая секция пропускается."""
         if rows:
             lines.append(f"\n{title}:")
             lines.extend(f"- {r}" for r in rows)

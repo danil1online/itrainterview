@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/llm/jobs", tags=["llm-jobs"])
 
 
 def _get_own(db: Session, user: User, job_id: int) -> LLMJob:
+    """Свой job по id; 404 если его нет или он принадлежит другому пользователю."""
     job = db.get(LLMJob, job_id)
     if job is None or job.user_id != user.id:
         raise HTTPException(404, "Задача не найдена")
@@ -21,6 +22,7 @@ def _get_own(db: Session, user: User, job_id: int) -> LLMJob:
 
 
 def _out(db: Session, job: LLMJob) -> LLMJobOut:
+    """LLMJob -> LLMJobOut; позиция в очереди считается только для pending/running."""
     return LLMJobOut(
         id=job.id,
         kind=job.kind,
@@ -37,6 +39,7 @@ def create_job(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    """Создаёт job в LLM-очереди и сразу возвращает (202); выполнение асинхронное, статус поллить по id. 422 — неизвестный kind."""
     try:
         job = submit_job(
             db,
@@ -54,6 +57,7 @@ def create_job(
 
 @router.get("/{job_id}", response_model=LLMJobOut)
 def get_job(job_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Статус, позиция и результат одного своего job'а; 404 — чужой или не найден."""
     return _out(db, _get_own(db, user, job_id))
 
 
@@ -73,6 +77,7 @@ def get_jobs(ids: str, db: Session = Depends(get_db), user: User = Depends(get_c
 
 @router.delete("/{job_id}")
 def cancel_job(job_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Отмена ожидающего job'а (status -> cancelled); 409 если уже выполняется/завершён, 404 — чужой."""
     job = _get_own(db, user, job_id)
     if job.status != "pending":
         raise HTTPException(409, f"Отменить можно только ожидающую задачу (статус: {job.status})")

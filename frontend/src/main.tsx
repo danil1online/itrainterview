@@ -1,3 +1,4 @@
+// Точка входа: монтирует приложение в BrowserRouter + AuthProvider (Monaco настраивает monaco-setup).
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';

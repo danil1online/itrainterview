@@ -183,6 +183,8 @@ def test_run_scores_prompt_quality(client, admin_headers, monkeypatch):
         headers=hdr,
     )
     assert r.status_code == 200
+    # один промпт — счётчик ровно 1 (не удваивается эндпоинтом и хендлером)
+    assert r.json()["prompts_count"] == 1
     job = wait_job(client, hdr, r.json()["job_id"])
     assert job["status"] == "done" and "```" in job["result"]
 
@@ -208,30 +210,29 @@ def test_chat_locked_after_pass_and_history_budget(client, admin_headers, monkey
         return "ок"
 
     monkeypatch.setattr(handlers, "chat_completion", stub)
-    if True:
-        tid = client.post("/api/admin/vibe-tasks", json=_uniq(BUGFIX_TASK, "budget"), headers=admin_headers).json()["id"]
-        hdr = _reg(client, "vibe-budget")
-        s = client.post(f"/api/vibe/tasks/{tid}/session", headers=hdr).json()
-        for i in range(15):
-            r = client.post(
-                f"/api/vibe/sessions/{s['id']}/chat",
-                json={"content": "длинный вопрос номер " + str(i) + ": " + "x" * 2000},
-                headers=hdr,
-            )
-            assert r.status_code == 200
-            # ждём ответ модели, прежде чем слать следующий промпт (FIFO-очередь)
-            assert wait_job(client, hdr, r.json()["job_id"])["status"] == "done"
-        last = captured[-1]
-        assert len(last) == 1 + vibe_api.HISTORY_LIMIT  # system + последние N
-        assert all(len(m["content"]) <= vibe_api.MSG_TRUNCATE for m in last[1:])
-
-        # проходим задачу и проверяем блокировку чата
-        client.post(
-            f"/api/vibe/sessions/{s['id']}/run",
-            json={"code": BUGFIX_TASK["reference_solution"]}, headers=hdr,
+    tid = client.post("/api/admin/vibe-tasks", json=_uniq(BUGFIX_TASK, "budget"), headers=admin_headers).json()["id"]
+    hdr = _reg(client, "vibe-budget")
+    s = client.post(f"/api/vibe/tasks/{tid}/session", headers=hdr).json()
+    for i in range(15):
+        r = client.post(
+            f"/api/vibe/sessions/{s['id']}/chat",
+            json={"content": "длинный вопрос номер " + str(i) + ": " + "x" * 2000},
+            headers=hdr,
         )
-        r = client.post(f"/api/vibe/sessions/{s['id']}/chat", json={"content": "ещё?"}, headers=hdr)
-        assert r.status_code == 409
+        assert r.status_code == 200
+        # ждём ответ модели, прежде чем слать следующий промпт (FIFO-очередь)
+        assert wait_job(client, hdr, r.json()["job_id"])["status"] == "done"
+    last = captured[-1]
+    assert len(last) == 1 + vibe_api.HISTORY_LIMIT  # system + последние N
+    assert all(len(m["content"]) <= vibe_api.MSG_TRUNCATE for m in last[1:])
+
+    # проходим задачу и проверяем блокировку чата
+    client.post(
+        f"/api/vibe/sessions/{s['id']}/run",
+        json={"code": BUGFIX_TASK["reference_solution"]}, headers=hdr,
+    )
+    r = client.post(f"/api/vibe/sessions/{s['id']}/chat", json={"content": "ещё?"}, headers=hdr)
+    assert r.status_code == 409
 
 
 # ------------------------------------------------------------------ тип tests (мутанты)
@@ -284,6 +285,41 @@ def test_tests_type_requires_marker_and_min_count(client, admin_headers):
     r = client.post(f"/api/vibe/sessions/{s['id']}/run", json={"code": weak1}, headers=hdr)
     body = r.json()
     assert body["passed"] is False and "минимум" in body["mutation"]["note"]
+
+
+def test_mutation_crash_is_caught(client, admin_headers):
+    """Мутант, который крашится, считается пойманным (программа не отработала чисто)."""
+    task = _uniq(TESTS_TASK, "crash-mut")
+    task["mutants"] = [
+        {"name": "плюс два", "code": "def double(x):\n    return x + 2\n"},
+        {"name": "краш", "code": "def double(x):\n    return x * 2\nraise RuntimeError('boom')\n"},
+    ]
+    task["min_mutants_caught"] = 2
+    tid = client.post("/api/admin/vibe-tasks", json=task, headers=admin_headers).json()["id"]
+    hdr = _reg(client, "vibe-crash-mut")
+    s = client.post(f"/api/vibe/tasks/{tid}/session", headers=hdr).json()
+    code = TESTS_TASK["initial_code"] + GOOD_TESTS
+    r = client.post(f"/api/vibe/sessions/{s['id']}/run", json={"code": code}, headers=hdr)
+    body = r.json()
+    muts = {m["name"]: m for m in body["mutation"]["mutants"]}
+    assert muts["краш"]["caught"] is True and "краш/таймаут" in muts["краш"]["note"]
+    assert body["mutation"]["caught_count"] == 2
+
+
+def test_mutation_checked_against_reference(client, admin_headers):
+    """Тесты валидируются на эталоне: изменил функцию под слабые тесты — не зачтено."""
+    hdr, s = _start_tests_task(client, admin_headers, "vibe-ref-check")
+    # Студент поменял double() ВЫШЕ маркера: его тест проходит на его коде (1+2=3),
+    # но падает на корректной реализации (1*2=2).
+    code = (
+        "def double(x):\n    return x + 2\n\n"
+        "# === ВАШИ ТЕСТЫ НИЖЕ (функции test_*, внутри assert) ===\n"
+        "\ndef test_one():\n    assert double(1) == 3\n"
+    )
+    r = client.post(f"/api/vibe/sessions/{s['id']}/run", json={"code": code}, headers=hdr)
+    body = r.json()
+    assert body["passed"] is False
+    assert "корректном коде" in body["mutation"]["note"]
 
 
 # ------------------------------------------------------------------ тип refactor (AST)
