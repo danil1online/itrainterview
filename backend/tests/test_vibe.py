@@ -322,6 +322,20 @@ def test_mutation_checked_against_reference(client, admin_headers):
     assert "корректном коде" in body["mutation"]["note"]
 
 
+def test_failed_assert_shows_expression(client, admin_headers):
+    """Голый assert без сообщения: в detail видно упавшее выражение, а не пустой текст."""
+    tid = client.post("/api/admin/vibe-tasks", json=_uniq(BUGFIX_TASK, "detail"), headers=admin_headers).json()["id"]
+    hdr = _reg(client, "vibe-detail")
+    s = client.post(f"/api/vibe/tasks/{tid}/session", headers=hdr).json()
+    # f(None) == 1 вместо 0.0 — голый assert падает без сообщения
+    code = "def f(x):\n    if x is None:\n        return 1\n    return x + 1\n"
+    r = client.post(f"/api/vibe/sessions/{s['id']}/run", json={"code": code}, headers=hdr)
+    body = r.json()
+    failed = [t for t in body["results"] if not t["passed"]]
+    assert failed, "ожидался падающий кейс"
+    assert any("assert f(None) == 0" in (t["detail"] or "") for t in failed), [t["detail"] for t in failed]
+
+
 # ------------------------------------------------------------------ тип refactor (AST)
 
 

@@ -44,7 +44,17 @@ def _assert_driver(cases: list[dict]) -> str:
         "        __fn()",
         '        print("T" + str(__i) + " PASS " + __name)',
         "    except AssertionError as __e:",
-        '        print("T" + str(__i) + " FAIL " + __name + ": assert failed: " + str(__e))',
+        # голый assert без сообщения даёт пустой str(e) — показываем упавшую строку из traceback
+        "        __msg = str(__e)",
+        "        if not __msg:",
+        "            import traceback as _tb",
+        "            __lines = [l.strip() for l in _tb.format_exc().splitlines() if l.strip()]",
+        # пропускаем хвост: 'AssertionError' и строки из '^' (Python 3.11+), ищем исходную строку
+        "            __k = len(__lines) - 1",
+        "            while __k >= 0 and (__lines[__k].startswith('AssertionError') or set(__lines[__k]) <= {'^'}):",
+        "                __k -= 1",
+        "            __msg = __lines[__k] if __k >= 0 else 'assert failed'",
+        '        print("T" + str(__i) + " FAIL " + __name + ": assert failed: " + __msg)',
         "    except Exception as __e:",
         '        print("T" + str(__i) + " FAIL " + __name + ": " + type(__e).__name__ + ": " + str(__e))',
     ]
@@ -76,7 +86,16 @@ for __i, (__name, __fn) in enumerate(__cases):
         __fn()
         print("T" + str(__i) + " PASS " + __name)
     except AssertionError as __e:
-        print("T" + str(__i) + " FAIL " + __name + ": assert failed: " + str(__e))
+        __msg = str(__e)
+        if not __msg:
+            import traceback as _tb
+            __lines = [l.strip() for l in _tb.format_exc().splitlines() if l.strip()]
+            # пропускаем хвост: 'AssertionError' и строки из '^' (Python 3.11+), ищем исходную строку
+            __k = len(__lines) - 1
+            while __k >= 0 and (__lines[__k].startswith('AssertionError') or set(__lines[__k]) <= {'^'}):
+                __k -= 1
+            __msg = __lines[__k] if __k >= 0 else 'assert failed'
+        print("T" + str(__i) + " FAIL " + __name + ": assert failed: " + __msg)
     except Exception as __e:
         print("T" + str(__i) + " FAIL " + __name + ": " + type(__e).__name__ + ": " + str(__e))
 """

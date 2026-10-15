@@ -52,24 +52,37 @@ class FakeSandbox:
         return RunOutcome(status=status, results=results, time_ms=sum(r.time_ms for r in results))
 
     def run_script(self, language, code, timeout_sec=None, memory_mb=None):
-        """Для вайб-кодинга: реально исполняем собранный код (он из тестов)."""
+        """Для вайб-кодинга: реально исполняем собранный код (он из тестов).
+
+        Код пишем во временный файл и компилируем с его именем — как в реальной песочнице
+        (python main.py), чтобы traceback содержал исходные строки упавших assert'ов.
+        """
         import contextlib
         import io
+        import tempfile
 
         if code.startswith("//timeout"):
             return {"status": "timeout", "exit_code": None, "stdout": "", "stderr": "timeout"}
         if code.startswith("//ce"):
             return {"status": "runtime_error", "exit_code": 1, "stdout": "", "stderr": "SyntaxError: fake"}
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
+            f.write(code)
+            path = f.name
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf):
-                exec(compile(code, "main.py", "exec"), {"__name": "__main__"})
+                exec(compile(code, path, "exec"), {"__name": "__main__"})
             return {"status": "ok", "exit_code": 0, "stdout": buf.getvalue(), "stderr": ""}
         except Exception as e:
             return {
                 "status": "runtime_error", "exit_code": 1,
                 "stdout": buf.getvalue(), "stderr": type(e).__name__ + ": " + str(e),
             }
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 @pytest.fixture(autouse=True)
