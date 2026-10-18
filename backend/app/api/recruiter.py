@@ -1,4 +1,9 @@
-"""Скрининг (общение) с рекрутером: LLM-чат + рекомендации по итогам."""
+"""Скрининг (общение) с рекрутером: LLM-чат + рекомендации по итогам.
+
+Доступ — после заполнения резюме и решения хотя бы одной задачи. В ходе диалога
+рекрутер обязан задать два технических вопроса («почему выбрали X, а не Y»):
+по решённой задаче и по технологии из резюме; ответы на них учитываются в рекомендациях.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
@@ -6,10 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import RecruiterMessage, Resume, User
+from app.models import RecruiterMessage, RecruiterProgress, Resume, User
 from app.schemas import RecruiterChatRequest, ResumeData
 from app.services.llm_queue import submit_job
-from app.services.skills import aggregate_skills, resume_completion, resume_to_text, solved_info
+from app.services.recruiter_questions import detect_asked, get_or_create_progress
+from app.services.skills import aggregate_skills, resume_completion, resume_to_text, solved_info, solved_tasks
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"])
 
@@ -18,12 +24,16 @@ SYSTEM_PROMPT = """Ты — рекрутер в IT-компании. Прово�
 Резюме кандидата:
 {resume_text}
 
+Задачи, решённые кандидатом на платформе:
+{solved_context}
+
 Правила проведения:
 1. Начни с короткого представления (имя + отдел кадров) и объясни формат беседы.
 2. Задавай уточняющие вопросы по реальному опыту кандидата из резюме: проекты, лабораторные работы, практика, курсы, хакатоны. Цель — убедиться, что кандидат действительно помнит, с чем работал, и может об этом рассказать. 1–2 вопроса в одном сообщении.
-3. Когда основные пункты опыта покрыты, перейди к зарплатным ожиданиям и базовым требованиям (график, локация, удалёнка).
-4. Не задавай алгоритмические задачи, не давай код, не обещай трудоустройство.
-5. Будь доброжелательным, разговорным и кратким — не более 3–4 фраз в сообщении.
+3. {required_questions}
+4. Когда основные пункты опыта покрыты, перейди к зарплатным ожиданиям и базовым требованиям (график, локация, удалёнка).
+5. Не задавай новые алгоритмические задачи, не давай код, не обещай трудоустройство.
+6. Будь доброжелательным, разговорным и кратким — не более 3–4 фраз в сообщении.
 
 Отвечай на русском языке."""
 
@@ -32,8 +42,68 @@ RECOMMEND_SYSTEM = (
     "1) Навыки разработки, которые стоит усилить (с привязкой к его реальному опыту и целевой должности).\n"
     "2) Коммуникационные навыки: что улучшить в самопрезентации и ответах.\n"
     "3) Что подчеркнуть в резюме и на собеседовании.\n"
+    "4) Оцени глубину ответов кандидата на обязательные технические вопросы (аргументация выбора "
+    "алгоритма/технологии, осознанность отказа от альтернатив) и отрази эту оценку в рекомендациях.\n"
     "Будь конкретным, опирайся только на факты из резюме и диалога. Отвечай на русском языке."
 )
+
+
+def _solved_context(solved: list[dict]) -> str:
+    """Список решённых задач для системного промпта (или «(нет)»)."""
+    if not solved:
+        return "(нет)"
+    from app.services.skills import PATTERN_RU
+
+    return ", ".join(f"«{t['title']}» ({PATTERN_RU.get(t['pattern'], t['pattern'])}, {t['level']})" for t in solved)
+
+
+def _required_block(progress: RecruiterProgress | None) -> str:
+    """Блок обязательных вопросов для системного промпта (только ещё не заданные)."""
+    pending = []
+    if progress is not None:
+        if progress.task_question and not progress.task_asked:
+            pending.append(progress.task_question)
+        if progress.tech_question and not progress.tech_asked:
+            pending.append(progress.tech_question)
+    if not pending:
+        return "Обязательные технические вопросы уже заданы — продолжай собеседование."
+    lines = "\n".join(f"{i}) {q}" for i, q in enumerate(pending, 1))
+    return (
+        "Обязательные технические вопросы — задай их обязательно в ходе беседы, по одному за сообщение, "
+        "сохраняя форму «почему выбрали X, а не Y»:\n" + lines
+    )
+
+
+def _pending_questions(progress: RecruiterProgress | None) -> list[str]:
+    """Ещё не заданные обязательные вопросы (пусто — все заданы или прогресса нет)."""
+    if progress is None:
+        return []
+    pending = []
+    if progress.task_question and not progress.task_asked:
+        pending.append(progress.task_question)
+    if progress.tech_question and not progress.tech_asked:
+        pending.append(progress.tech_question)
+    return pending
+
+
+def _qa_section(progress: RecruiterProgress, rows: list[RecruiterMessage]) -> str:
+    """Обязательные вопросы + ответы кандидата (первое user-сообщение после вопроса)."""
+    pairs = []
+    for kind in ("task", "tech"):
+        meta = (progress.meta or {}).get(kind)
+        q_text = progress.task_question if kind == "task" else progress.tech_question
+        if not meta or not q_text:
+            continue
+        answer = None
+        for i, r in enumerate(rows):
+            if r.role == "assistant" and detect_asked(meta, r.content):
+                for nxt in rows[i + 1:]:
+                    if nxt.role == "user":
+                        answer = nxt.content
+                        break
+                break
+        pairs.append(f"Вопрос: {q_text}\nОтвет: {answer or '(ответа не было)'}")
+    return "\n\n".join(pairs) or "(вопросы ещё не задавались)"
 
 
 def _load_resume(db: Session, user: User) -> tuple[ResumeData, dict]:
@@ -73,13 +143,24 @@ async def chat(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Шаг диалога со скрининг-рекрутером: user-сообщение сохраняется сразу, ответ придёт job'ом 'recruiter_chat'. 409 — резюме не готово."""
+    """Шаг диалога со скрининг-рекрутером: user-сообщение сохраняется сразу, ответ придёт job'ом 'recruiter_chat'.
+
+    409 — резюме не готово или не решена ни одна задача.
+    """
     data, comp = _load_resume(db, user)
     if not comp["ready"]:
         raise HTTPException(409, detail={"issues": comp["missing"]})
+    solved = solved_tasks(db, user)
+    if not solved:
+        raise HTTPException(409, detail={"issues": ["Решите хотя бы одну задачу из банка"]})
     patterns, langs = solved_info(db, user)
     skills = aggregate_skills(data, patterns, langs)
-    system = SYSTEM_PROMPT.format(resume_text=resume_to_text(data, skills))
+    progress = get_or_create_progress(db, user, solved, data)
+    system = SYSTEM_PROMPT.format(
+        resume_text=resume_to_text(data, skills),
+        solved_context=_solved_context(solved),
+        required_questions=_required_block(progress),
+    )
     history = [{"role": m.role, "content": m.content} for m in payload.messages[-10:]]
     last = payload.messages[-1]
     if last.role == "user":
@@ -129,13 +210,37 @@ def get_recommendation(
     }
 
 
+@router.get("/status")
+def status(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Готовность к собеседованию и статус обязательных технических вопросов."""
+    data, comp = _load_resume(db, user)
+    solved = solved_tasks(db, user)
+    progress = db.scalar(select(RecruiterProgress).where(RecruiterProgress.user_id == user.id))
+    questions = []
+    if progress is not None:
+        if progress.task_question:
+            questions.append({"kind": "task", "text": progress.task_question, "asked": progress.task_asked})
+        if progress.tech_question:
+            questions.append({"kind": "tech", "text": progress.tech_question, "asked": progress.tech_asked})
+    return {
+        "interview_ready": bool(comp["ready"] and solved),
+        "missing_resume": comp["missing"],
+        "solved_count": len(solved),
+        "questions": questions,
+    }
+
+
 @router.post("/reset")
 def reset(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Полный сброс истории общения с рекрутёром (включая рекомендации)."""
+    """Полный сброс истории общения с рекрутёром (включая рекомендации и прогресс вопросов)."""
     db.execute(delete(RecruiterMessage).where(RecruiterMessage.user_id == user.id))
+    db.execute(delete(RecruiterProgress).where(RecruiterProgress.user_id == user.id))
     db.commit()
     return {"ok": True}
 
@@ -145,10 +250,21 @@ async def recommendations(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Генерация рекомендаций по резюме и транскрипту последних 20 сообщений через очередь. 409 — резюме не готово или текущие ещё актуальны."""
+    """Генерация рекомендаций по резюме и транскрипту последних 20 сообщений через очередь.
+
+    409 — резюме не готово, нет решённых задач, обязательные вопросы ещё не заданы или текущие ещё актуальны.
+    """
     data, comp = _load_resume(db, user)
     if not comp["ready"]:
         raise HTTPException(409, detail={"issues": comp["missing"]})
+    solved = solved_tasks(db, user)
+    if not solved:
+        raise HTTPException(409, detail={"issues": ["Решите хотя бы одну задачу из банка"]})
+
+    progress = db.scalar(select(RecruiterProgress).where(RecruiterProgress.user_id == user.id))
+    pending = _pending_questions(progress)
+    if progress is None or pending:
+        raise HTTPException(409, "Сначала задайте обязательные технические вопросы в диалоге")
 
     existing = _latest_recommendation(db, user)
     if existing is not None and _is_fresh(db, user, existing):
@@ -167,7 +283,9 @@ async def recommendations(
     patterns, langs = solved_info(db, user)
     skills = aggregate_skills(data, patterns, langs)
     user_content = (
-        "Резюме:\n" + resume_to_text(data, skills) + "\n\nТранскрипт собеседования:\n" + transcript
+        "Резюме:\n" + resume_to_text(data, skills)
+        + "\n\nТранскрипт собеседования:\n" + transcript
+        + "\n\nОбязательные технические вопросы и ответы кандидата на них:\n" + _qa_section(progress, rows)
     )
     job = submit_job(
         db, user.id, "recommendation",

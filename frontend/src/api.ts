@@ -294,6 +294,7 @@ export interface ResumeResponse {
   data: ResumeData;
   completion: { ready: boolean; missing: string[] };
   skills: SkillsSummary;
+  solved: { count: number; tasks: { title: string; pattern_ru: string; level: string }[] };
   updated_at: string | null;
 }
 

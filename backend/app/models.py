@@ -139,6 +139,22 @@ class RecruiterMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
+class RecruiterProgress(Base):
+    """Обязательные технические вопросы собеседования и статус их задавания."""
+
+    __tablename__ = "recruiter_progress"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    task_question: Mapped[str | None] = mapped_column(Text, nullable=True)  # вопрос по решённой задаче
+    tech_question: Mapped[str | None] = mapped_column(Text, nullable=True)  # вопрос по технологии из резюме
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)  # для детекции: {"task": {...}, "tech": {...}}
+    task_asked: Mapped[bool] = mapped_column(Boolean, default=False)
+    tech_asked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class VibeTask(Base):
     """Задача тренажёра «Вайб-кодинг» (bugfix|tests|refactor|contract)."""
 

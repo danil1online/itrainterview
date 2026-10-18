@@ -22,6 +22,19 @@ def solved_info(db, user) -> tuple[set[str], set[str]]:
         patterns = {t.pattern for t in tasks}
     return patterns, langs
 
+
+def solved_tasks(db, user) -> list[dict]:
+    """Решённые (accepted) активные задачи со деталями — для вопросов рекрутёра."""
+    subs = db.scalars(select(Submission).where(Submission.user_id == user.id)).all()
+    ids = {s.task_id for s in subs if s.status == "accepted"}
+    if not ids:
+        return []
+    tasks = db.scalars(select(Task).where(Task.id.in_(ids), Task.is_active.is_(True))).all()
+    return [
+        {"id": t.id, "slug": t.slug, "title": t.title, "pattern": t.pattern, "level": t.level}
+        for t in tasks
+    ]
+
 # Единый источник стека технологий: {name, category}
 TECH_STACK: list[dict] = [
     # языки

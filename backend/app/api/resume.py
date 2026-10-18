@@ -10,10 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import RecruiterMessage, Resume, User
+from app.models import RecruiterMessage, RecruiterProgress, Resume, User
 from app.schemas import ResumeData
 from app.services.resume_docx import build_resume_docx
-from app.services.skills import TECH_STACK, aggregate_skills, resume_completion, solved_info
+from app.services.skills import TECH_STACK, aggregate_skills, resume_completion, solved_info, solved_tasks
 
 router = APIRouter(prefix="/api/resume", tags=["resume"])
 
@@ -29,15 +29,25 @@ def get_resume(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Данные резюме, готовность и навыки (с учётом решённых задач); пустые по умолчанию."""
+    """Данные резюме, готовность, навыки (с учётом решённых задач) и список решённых; пустые по умолчанию."""
     row = db.scalar(select(Resume).where(Resume.user_id == user.id))
     data = ResumeData.model_validate(row.data) if row else ResumeData()
     patterns, langs = solved_info(db, user)
     skills = aggregate_skills(data, patterns, langs)
+    from app.services.skills import PATTERN_RU
+
+    solved = solved_tasks(db, user)
     return {
         "data": data.model_dump(),
         "completion": resume_completion(data),
         "skills": skills,
+        "solved": {
+            "count": len(solved),
+            "tasks": [
+                {"title": t["title"], "pattern_ru": PATTERN_RU.get(t["pattern"], t["pattern"]), "level": t["level"]}
+                for t in solved
+            ],
+        },
         "updated_at": row.updated_at.isoformat() if row else None,
     }
 
@@ -56,8 +66,9 @@ def put_resume(
         db.add(Resume(user_id=user.id, data=dumped))
     else:
         if row.data != dumped:
-            # резюме изменилось — контекст скрининга устарел, сбрасываем историю общения
+            # резюме изменилось — контекст скрининга устарел, сбрасываем историю и прогресс вопросов
             db.execute(delete(RecruiterMessage).where(RecruiterMessage.user_id == user.id))
+            db.execute(delete(RecruiterProgress).where(RecruiterProgress.user_id == user.id))
             recruiter_reset = True
         row.data = dumped
     db.commit()

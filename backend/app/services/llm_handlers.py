@@ -53,11 +53,20 @@ async def h_assistant_chat(job, db: Session) -> str:
 
 @register_handler("recruiter_chat")
 async def h_recruiter_chat(job, db: Session) -> str:
-    """Чат с рекрутером: ответ + сохранение в историю RecruiterMessage."""
-    from app.models import RecruiterMessage
+    """Чат с рекрутером: ответ + сохранение в историю + отметка заданных обязательных вопросов."""
+    from app.models import RecruiterMessage, RecruiterProgress
+    from app.services.recruiter_questions import detect_asked
 
     reply = await _plain_chat(job, db)
     db.add(RecruiterMessage(user_id=job.user_id, role="assistant", content=reply))
+    progress = db.scalar(select(RecruiterProgress).where(RecruiterProgress.user_id == job.user_id))
+    if progress is not None:
+        meta = progress.meta or {}
+        # рекрутёр мог задать оба вопроса в одном сообщении — проверяем каждый по метаданным
+        if progress.task_question and not progress.task_asked and detect_asked(meta.get("task") or {}, reply):
+            progress.task_asked = True
+        if progress.tech_question and not progress.tech_asked and detect_asked(meta.get("tech") or {}, reply):
+            progress.tech_asked = True
     db.commit()
     return reply
 
