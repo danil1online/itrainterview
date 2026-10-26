@@ -371,7 +371,7 @@ function SettingsTab() {
 
   const FIELDS: Array<[string, string, string]> = [
     ['llm_base_url', 'LLM: OpenAI-совместимый URL', 'http://192.168.2.83:8080/v1'],
-    ['llm_model', 'LLM: имя модели (пусто = автоопределение)', 'qwen2.5-3b-instruct-q4_k_m.gguf'],
+    ['llm_model', 'LLM: имя модели (пусто = автоопределение)', 'GigaChat3.1-10B-A1.8B-q4_K_M.gguf'],
     ['llm_api_key', 'LLM: API-ключ (если нужен)', ''],
     ['llm_max_concurrent', 'LLM-очередь: параллельных запросов к модели (1..32)', '1'],
     ['sandbox_timeout_sec', 'Песочница: таймаут, сек (1..60)', '5'],
